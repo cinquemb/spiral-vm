@@ -1,310 +1,171 @@
-#include <armadillo>
-#include <complex>
-#include <iostream>
-#include <fstream>
-using namespace arma;
-using namespace std;
-
-const int N = 900;
-const int D = 2;
-const int ROWS = 30;
-const int COLS = 30;
-
 /*
 
 Requirements: Armadillo installed (e.g., via libarmadillo-dev on Ubuntu) and linked with LAPACK/BLAS.
-Compile: g++ -O2 floquet_2d.cpp -o floquet_2d -larmadillo `pkg-config lapack --libs` `pkg-config blas --libs`
-Compile: g++ -O2 floquet_2d_simple.cpp -o floquet_2d_simple -larmadillo `pkg-config lapack --libs` `pkg-config blas --libs`
-Run: ./floquet_2d
+Compile: g++ -O2 spiral_vm_core.cpp -o spiral_vm -larmadillo `pkg-config lapack --libs` `pkg-config blas --libs`
+Run: ./spiral_vm
 
 sudo apt-get install libopenblas-openmp-dev libarmadillo-dev libblas-dev liblapack-dev gfortran
 
 */
 
-cx_mat mat_vec_mult_cl10(const sp_cx_mat& H, const cx_mat& phi) {
-    return H * phi;
-}
+// spiral_vm.cpp
 
-double inner_product_cl10(const cx_mat& phi1, const cx_mat& phi2) {
-    cx_double prod = as_scalar(phi1.t() * phi2);
-    return real(prod);
-}
+#include <armadillo>
+#include <complex>
+#include <iostream>
+#include <fstream>
+#include <random>
+#include <vector>
+#include <sstream>
+#include <cmath>
 
+using namespace arma;
+using namespace std;
 
-void compute_nonzero_indices(double J, double ht, int rows, int cols, int D, 
-                             umat& locations, cx_vec& values, uint& nz) {
-    const int N = rows * cols;
-    const int NNZ = 6 * N + 2 * rows * cols + 2 * rows * cols; // 5400
-    nz = 0;
+class SpiralVM {
+public:
+    static constexpr int D = 2;
+    const int rows, cols;         // Lattice dimensions
+    const int N;                  // Number of sites
+    double J, h0, h1, omega, T;  // Hamiltonian / Floquet parameters
+    bool is_ang;                 // Spiral angle flag
 
-    if (locations.n_cols < NNZ || values.n_elem < NNZ) {
-        cerr << "Error: Arrays too small. Required: " << NNZ 
-             << ", Got: " << locations.n_cols << "\n";
-        return;
+private:
+    cx_mat phi;                  // Quantum state vector (2*N x 1)
+    cx_mat phi_in;               // Initial state for fidelity measurement
+    int steps;                   // RK4 steps per period
+    int current_period;          // Tracks Floquet periods elapsed
+    double sx_gain;              // h1 gain parameter
+
+    mt19937 rng;
+    uniform_real_distribution<double> dist;
+
+    vector<double> fidelities;
+    vector<double> fidelity_window;
+    std::vector<LogicalQubit> logical_qubits; // Add this as a member field
+
+public:
+    SpiralVM(int r, int c) : rows(r), cols(c), N(r * c),
+        J(0.3), h0(0), h1(2.5 / 4.4),
+        omega(20 * 2 * datum::pi), T(2 * datum::pi / omega),
+        is_ang(true), steps(200),
+        sx_gain(1900.0), current_period(0),
+        rng(777), dist(0.0, 1.0),
+        fidelities(5001, 0.0), fidelity_window(32, 0.0)
+    {
+        // Initialize state vectors to zero size 2*N x 1
+        phi = zeros<cx_mat>(N * D, 1);
+        phi_in = zeros<cx_mat>(N * D, 1);
     }
 
-    for (int i = 0; i < N; i++) {
-        locations(0, nz) = i * D;     locations(1, nz) = i * D + 1; values(nz) = -ht; nz++;
-        locations(0, nz) = i * D + 1; locations(1, nz) = i * D;     values(nz) = -ht; nz++;
-    }
-
-    for (int row = 0; row < rows; row++) {
-        for (int col = 0; col < cols; col++) {
-            int i = row * cols + col;
-            int j_right = row * cols + ((col + 1) % cols);
-            int j_down = ((row + 1) % rows) * cols + col;
-
-            if (j_right > i || (j_right < i && col == cols - 1)) {
-                locations(0, nz) = i * D;     locations(1, nz) = j_right * D;     values(nz) = -J; nz++;
-                locations(0, nz) = i * D + 1; locations(1, nz) = j_right * D + 1; values(nz) = -J; nz++;
-            }
-
-            if (j_down > i || (j_down < i && row == rows - 1)) {
-                locations(0, nz) = i * D;     locations(1, nz) = j_down * D;     values(nz) = -J; nz++;
-                locations(0, nz) = i * D + 1; locations(1, nz) = j_down * D + 1; values(nz) = -J; nz++;
-            }
-        }
-    }
-}
-
-double compute_zz_energy(const cx_mat& phi, double J, double omega_ang, double period, bool is_ang = false) {
-    double energy = 0.0;
-    double theta_max_base = M_PI / 512;
-    double theta_max = theta_max_base * (1.0 - cos(M_PI * period / 2.0)) / 2.0; // Peaks at 2T, 6T, etc.
-
-    double center_x = COLS / 2.0, center_y = ROWS / 2.0;
-    double r_max = sqrt(center_x * center_x + center_y * center_y);
-    double norm_factor = sqrt(ROWS * COLS);
-
-    for (int row = 0; row < ROWS; row++) {
-        for (int col = 0; col < COLS; col++) {
-            int i = row * COLS + col;
-            int j_right = row * COLS + ((col + 1) % COLS);
-            int j_down = ((row + 1) % ROWS) * COLS + col;
-
-            double r = sqrt(pow(row - center_y, 2) + pow(col - center_x, 2));
-            double phi_ang = atan2(row - center_y, col - center_x);
-            double theta = (omega_ang == 0) ? 0 : theta_max * (r / r_max) * cos(omega_ang * phi_ang);
-            cx_double J_twist;
-            if (is_ang == true)
-                J_twist = J * cx_double(0, sin(theta));
-            else
-                J_twist = J;
-
-            cx_double z_i = (phi(i * D, 0) - phi(i * D + 1, 0)) * norm_factor;
-            cx_double z_jr = (phi(j_right * D, 0) - phi(j_right * D + 1, 0)) * norm_factor;
-            cx_double z_jd = (phi(j_down * D, 0) - phi(j_down * D + 1, 0)) * norm_factor;
-
-            if (is_ang) {
-                energy += imag(J_twist * z_i * z_jr); // Spiral: imaginary part
-                energy += imag(J_twist * z_i * z_jd);
-            } else {
-                energy += real(J_twist * z_i * z_jr); // No spiral: real part
-                energy += real(J_twist * z_i * z_jd);
-            }
-        }
-    }
-    return energy;
-}
-
-cx_mat compute_zz_energy_vector(const cx_mat& phi, double J, double omega_ang, double period, bool is_ang = false) {
-    const int N = ROWS * COLS;
-    cx_mat Hzz_phi = zeros<cx_mat>(N * D, 1);
-    double theta_max_base = M_PI / 512;
-    double theta_max = theta_max_base * (1.0 - cos(M_PI * period / 2.0)) / 2.0; // Peaks at 2T, 6T, etc.
-    double center_x = COLS / 2.0, center_y = ROWS / 2.0;
-    double r_max = sqrt(center_x * center_x + center_y * center_y);
-    double norm_factor = sqrt(N);
-
-    for (int row = 0; row < ROWS; row++) {
-        for (int col = 0; col < COLS; col++) {
-            int i = row * COLS + col;
-            int j_right = row * COLS + ((col + 1) % COLS);
-            int j_down = ((row + 1) % ROWS) * COLS + col;
-
-            double r = sqrt(pow(row - center_y, 2) + pow(col - center_x, 2));
-            double phi_ang = atan2(row - center_y, col - center_x);
-            double theta = (omega_ang == 0) ? 0 : theta_max * (r / r_max) * cos(omega_ang * phi_ang);
-            cx_double J_twist = (is_ang) ? J * cx_double(0, sin(theta)) : J;
-
-            // Fixed: Use raw amplitudes, not norms
-            cx_double z_jr = (phi(j_right * D, 0) - phi(j_right * D + 1, 0)) * norm_factor;
-            cx_double z_jd = (phi(j_down * D, 0) - phi(j_down * D + 1, 0)) * norm_factor;
-
-            Hzz_phi(i * D, 0) = J_twist * (z_jr + z_jd) * phi(i * D, 0);     // sigma^z_i = +1
-            Hzz_phi(i * D + 1, 0) = J_twist * (-z_jr - z_jd) * phi(i * D + 1, 0); // sigma^z_i = -1
-        }
-    }
-    return Hzz_phi;
-}
-
-void compute_nonzero_indices_spiral_twist(double J, double ht, int rows, int cols, int D, double omega_ang,
-                                          umat& locations, cx_vec& values, uint& nz) {
-    const int N = rows * cols;
-    const int NNZ = 2 * N; // 2N for sigma^x, 4N for sigma^z sigma^z (4 bonds per site)
-
-    nz = 0;
-
-    // Transverse field terms (-ht sigma^x)
-    for (int i = 0; i < N; i++) {
-        locations(0, nz) = i * D;     locations(1, nz) = i * D + 1; values(nz) = -ht; nz++;
-        locations(0, nz) = i * D + 1; locations(1, nz) = i * D;     values(nz) = -ht; nz++;
-    }
-}
-
-sp_cx_mat hamiltonian_cl10_90(double J, double ht) {
-    int NNZ = 2 * N + 2 * ROWS * COLS + 2 * ROWS * COLS;
-    umat locations(2, NNZ);
-    cx_vec values(NNZ);
-    uint nz;
-    compute_nonzero_indices(J, ht, ROWS, COLS, D, locations, values, nz);
-    return sp_cx_mat(locations.submat(0, 0, 1, nz - 1), values.subvec(0, nz - 1), N * D, N * D);
-}
-
-sp_cx_mat hamiltonian_cl10_90_spiral_twist(double J, double ht, double omega_ang) {
-    int N = ROWS * COLS;
-    const int NNZ = 2 * N; // 2N for sigma^x, 2N for sigma^z sigma^z
-    umat locations(2, NNZ);
-    cx_vec values(NNZ);
-    uint nz;
-    compute_nonzero_indices_spiral_twist(J, ht, ROWS, COLS, D, omega_ang, locations, values, nz);
-    return sp_cx_mat(locations.submat(0, 0, 1, nz - 1), values.subvec(0, nz - 1), N * D, N * D);
-}
-
-double compute_avg_stabilizer(const cx_mat& phi) {
-    double stab_sum = 0.0;
-    int count = 0;
-    for (int row = 0; row < ROWS; row++) {
-        for (int col = 0; col < COLS; col++) {
-            int i = row * COLS + col;
-            int j_right = row * COLS + ((col + 1) % COLS);
-            int j_down = ((row + 1) % ROWS) * COLS + col;
-            double zi = abs(phi(i*D,0) - phi(i*D+1,0));
-            double zj_right = abs(phi(j_right*D,0) - phi(j_right*D+1,0));
-            double zj_down = abs(phi(j_down*D,0) - phi(j_down*D+1,0));
-            stab_sum += zi * zj_right + zi * zj_down;
-            count += 2;
-        }
-    }
-    return stab_sum / count; // ~1 for perfect order
-}
-
-void floquet_cl10_90(double J, double h0, double h1, double omega, double T, int steps, int N_max, double sx_gain, bool is_ang) {
-    double dt = T / steps;
-
-    string initial_state = "neel";
-    cx_mat phi = zeros<cx_mat>(N * D, 1);
-    mt19937 rng(777);
-    uniform_real_distribution<double> dist(0.0, 1.0);
-    for (int row = 0; row < ROWS; row++) {
-        for (int col = 0; col < COLS; col++) {
-            int i = row * COLS + col;
-            if (initial_state == "neel") {
-                if ((row + col) % 2 == 0) {
-                    phi(i * D, 0) = 1.0; // |0>
-                } else {
-                    phi(i * D + 1, 0) = 1.0; // |1>
-                }
-            } else if (initial_state == "polarized") {
-                phi(i * D, 0) = 1.0; // |↑⟩
-            } else if (initial_state == "disordered") {
-                if (dist(rng) < 0.5) {
-                    phi(i * D, 0) = 1.0; // |↑⟩
-                } else {
-                    phi(i * D + 1, 0) = 1.0; // |↓⟩
+    // Initialize quantum state: "neel", "polarized", or "disordered"
+    void initialize_state(const string& initial_state = "neel") {
+        for (int row = 0; row < rows; row++) {
+            for (int col = 0; col < cols; col++) {
+                int i = row * cols + col;
+                if (initial_state == "neel") {
+                    if ((row + col) % 2 == 0) {
+                        phi(i * D, 0) = 1.0;       // |0>
+                        phi(i * D + 1, 0) = 0.0;
+                    } else {
+                        phi(i * D, 0) = 0.0;
+                        phi(i * D + 1, 0) = 1.0;   // |1>
+                    }
+                } else if (initial_state == "polarized") {
+                    phi(i * D, 0) = 1.0;           // |↑>
+                    phi(i * D + 1, 0) = 0.0;
+                } else if (initial_state == "disordered") {
+                    if (dist(rng) < 0.5) {
+                        phi(i * D, 0) = 1.0;       // |↑>
+                        phi(i * D + 1, 0) = 0.0;
+                    } else {
+                        phi(i * D, 0) = 0.0;
+                        phi(i * D + 1, 0) = 1.0;   // |↓>
+                    }
                 }
             }
         }
+        double norm0 = sqrt(inner_product_cl10(phi, phi));
+        phi /= norm0;
+        phi_in = phi;
+        fidelities[0] = 1.0;
+
+        current_period = 0;
+
+        cout << "Initial norm: " << norm0 << "\n";
     }
 
+    // Full Floquet evolution running N_max periods, saved to filename
+    void run_floquet(int N_max, const string& initial_state) {
+        ofstream fout;
+        stringstream fname;
+        fname << "dtc_floquet_with_" << initial_state << "_state_" << (is_ang ? "_spiral_" : "_no_spiral_") << (int)sx_gain << "_omega_" << omega << "_T_" << T << ".txt";
+        fout.open(fname.str());
+        fout << "Period,Fidelity,Stabilizer,Energy,sx_energy,zz_energy,Delta_F,ht_eff_end,sx_avg\n";
 
-    double norm0 = sqrt(inner_product_cl10(phi, phi)); // ~46.1111
-    phi /= norm0;
-    cx_mat phi_in = phi;
-    double h1_base = h1;
+        double delta_F = 0.0;
 
-    //h1 energy gain
-    //double sx_gain = 1900;//1300.0; max limit
+        // Initial energy and stabilizer calculations
+        sp_cx_mat H_init = hamiltonian_cl10_90_spiral_twist(J, 0, 0);
+        cx_mat Hphi_init = mat_vec_mult_cl10(H_init, phi);
+        double energy_init = real(inner_product_cl10(phi, Hphi_init)) + compute_zz_energy(phi, J, 0, 0);
+        double zz_energy_init = compute_zz_energy(phi, J, 0, 0);
+        double sx_energy_init = 0.0;
+        for (int i = 0; i < N; i++) {
+            sx_energy_init -= h1 * 2.0 * real(phi(i * D, 0) * conj(phi(i * D + 1, 0)));
+        }
+        fout << "0,1.0," << compute_avg_stabilizer(phi) << "," << energy_init << "," << sx_energy_init << "," << zz_energy_init << "," << h1 << ",0,0\n";
 
-    double h1_limit = 10000.00;
+        for (int n = 0; n < N_max; n++) {
+            step_period(n, delta_F);
 
-    //h1 feedback gain
-    double h1_f_gain  = 0.0;
-    double k_bA = 0.0; //3 is too much, 0.4 is too little; 0.8 - 1.6 is ok;
-    
-    //angualr freq
-    double k_oA = 1.0;//angualr amp
-    double alpha_ang = 1.0;    //rotatinal amp
+            // Logging fidelity, stabilizers, energy etc.
+            fout << n + 1 << "," << fidelities[n + 1] << "," << compute_avg_stabilizer(phi) << ",";
+            double sx_energy = 0.0;
+            for (int i = 0; i < N; i++) {
+                sx_energy -= phi(i * D, 0) * conj(phi(i * D + 1, 0)) * 2.0 * h1;
+            }
+            double zz_energy = is_ang ? compute_zz_energy(phi, J, omega_ang_end(n), n + 1, true) : compute_zz_energy(phi, J, 0, 0);
+            double energy = sx_energy + zz_energy;
 
-    double omega_ang_base = 0.0;
-    
-    double P1 = T;
-    double P2 = T;
-    double beta_ang = 0.0;
-    double k_angular = 0.0;
-    double P = T;
-    double omega_omega_angA = omega;
-    double omega_omega_angB = 2*omega_omega_angA;
+            fout << energy << "," << sx_energy << "," << zz_energy << "," << delta_F << "," << h_effective_end(n) << "," << sx_avg(n) << "\n";
 
-    if (is_ang == false) {
-        alpha_ang = 0;
-        k_oA = 0;
-        omega_omega_angA = 0;
-        omega_omega_angB = 0;
+            cout << "Period " << n + 1 << ": Fidelity = " << fidelities[n + 1] << ", Energy = " << energy << "\n";
+
+            if (n % 2 == 1 && fidelities[n + 1] > 0.9) {
+                cout << "Period-doubling at " << n + 1 << "T\n";
+            }
+        }
+        fout.close();
     }
 
-    const int W = 32;
-    vector<double> fidelity_window(W, 0.0);
-    double delta_F_target = 1.0;
-    vec fidelities(N_max + 1, fill::zeros);
-    fidelities(0) = 1.0;
-
-
-    //spiral
-    double omega_ang_init = omega_ang_base;
-    sp_cx_mat H_init = hamiltonian_cl10_90_spiral_twist(J, 0, 0);
-    cx_mat Hphi_init = mat_vec_mult_cl10(H_init, phi);
-    double energy_init = real(inner_product_cl10(phi, Hphi_init)) + compute_zz_energy(phi, J, 0, 0); // Full energy
-    double zz_energy_init = compute_zz_energy(phi, J, 0, 0);
-    /*no spiral energy
-    sp_cx_mat H_init = hamiltonian_cl10_90_spiral_twist(J, 0, 2.0); // J-term only
-    cx_mat Hphi_init = mat_vec_mult_cl10(H_init, phi);
-    double energy_init = real(inner_product_cl10(phi, Hphi_init));
-
-    */
-
-    cout << "Initial norm = " << norm0 << "\n";
-    cout << "phi[0] initial = " << phi(0, 0) << "\n";
-    cout << "Initial energy = " << energy_init << "\n";
-
-
-    std::ostringstream os;
-    //os << "dtc_floquet_with" << ((is_ang == false) ? "_no_spiral_" : "_spiral_") << (int)sx_gain << ".txt";
-    os << "dtc_floquet_with_" << initial_state << "_state_" << ((is_ang == false) ? "_no_spiral_" : "_spiral_") << (int)sx_gain << "_omega_" << omega << "_omegaang_" << omega_ang_base << ".txt";
-    std::string fname = os.str();
-
-    double sx_energy_init = 0.0;
-    for (int i = 0; i < N; i++) {
-        sx_energy_init -= h1 * 2.0 * real(phi(i * D, 0) * conj(phi(i * D + 1, 0)));
-    }
-
-
-    ofstream fout(fname);
-    fout << "Period,Fidelity,Stabilizer,Energy,sx_energy,zz_energy,Delta_F,ht_eff_end,sx_avg\n";
-    fout << "0,1.0," << compute_avg_stabilizer(phi) << "," << energy_init << ","<< sx_energy_init<<","<<zz_energy_init <<"," << h1 << ",0,0\n";
-    
-    double delta_F = 0.0; // Initial fidelity
-    double sx_prev = 0.0;
-    for (int n = 0; n < N_max; n++) {
-        double t_n = n * T; // Base time for this period
+    // RK4 integration over one Floquet period n updating state phi and fidelity delta_F
+    void step_period(int n, double &delta_F) {
+        double dt = T / steps;
+        double delta_F_target = 1.0;
 
         cx_mat phi_new = phi;
+
+        // Coefficients for feedback, modulation, etc.
+        double k_bA = 0.0; // feedback gain parameter (adjust as needed)
+        double h1_limit = 10000.0;
+        double h1_f_gain = 0.0;
+        double k_oA = 1.0;
+        double alpha_ang = is_ang ? 1.0 : 0.0;
+        double beta_ang = 0.0;
+        double k_angular = 0.0;
+        double omega_omega_angA = omega;
+        double omega_omega_angB = 2 * omega_omega_angA;
+        double omega_ang_base = 0.0;
+
         for (int k = 0; k < steps; k++) {
-            double t = t_n + k * dt;
-            double angular_freq_quasi = alpha_ang * (sin(omega_omega_angA * M_PI * t / P1) + sin(omega_omega_angB * M_PI * t / P2));
+            double t = n * T + k * dt;
+
+            double angular_freq_quasi = alpha_ang * (sin(omega_omega_angA * M_PI * t / T) + sin(omega_omega_angB * M_PI * t / T));
             double angular_freq_feedback = beta_ang * (delta_F_target - delta_F);
-            double omega_ang_mod = omega_ang_base + k_oA * sin(omega_omega_angA * M_PI * t / P1);
+            double omega_ang_mod = omega_ang_base + k_oA * sin(omega_omega_angA * M_PI * t / T);
             double omega_ang = omega_ang_mod + angular_freq_quasi + k_angular * angular_freq_feedback;
+
             double h1_feedback = h1_f_gain * (k_bA * (delta_F_target - delta_F));
             double ht_eff = h0 + h1 * cos(omega * (t / 2) + M_PI / 4.0) + h1_feedback;
 
@@ -312,7 +173,8 @@ void floquet_cl10_90(double J, double h0, double h1, double omega, double T, int
             else if (ht_eff / J < -h1_limit) ht_eff = -h1_limit * J;
 
             sp_cx_mat H_sx = hamiltonian_cl10_90_spiral_twist(J, ht_eff, omega_ang);
-            if (is_ang == false) {
+
+            if (!is_ang) {
                 cx_mat Hzz = compute_zz_energy_vector(phi_new, J, omega_ang, 0);
                 cx_mat k1 = mat_vec_mult_cl10(H_sx, phi_new) + Hzz;
                 cx_mat phi_temp = phi_new + (-cx_double(0, 1) * dt / 2.0) * k1;
@@ -336,91 +198,269 @@ void floquet_cl10_90(double J, double h0, double h1, double omega, double T, int
                 double normrk4 = sqrt(real(inner_product_cl10(phi_new, phi_new)));
                 phi_new /= normrk4;
             }
-            
         }
         phi = phi_new;
 
-        double angular_freq_quasi_end = alpha_ang * (sin(omega_omega_angA * M_PI * (n+1) * T / P1) + sin(omega_omega_angB * M_PI * (n+1) * T / P2));
-        double angular_freq_feedback_end = beta_ang * (delta_F_target - delta_F);
-        double omega_ang_mod_end = omega_ang_base + k_oA * sin(omega_omega_angA * M_PI * (n+1) + T / P);
-        double omega_ang_end = omega_ang_mod_end + angular_freq_quasi_end + k_angular * angular_freq_feedback_end;
-        double h1_feedback_end = h1_f_gain * (k_bA * (delta_F_target - delta_F));
-        double ht_eff_end = h0 + h1 * cos(omega * ((n+1) * T / 2) + M_PI / 4.0) + h1_feedback_end;
-        if (ht_eff_end/J > h1_limit) ht_eff_end = h1_limit * J;
-        else if (ht_eff_end/J < -h1_limit) ht_eff_end = -h1_limit * J;
+        // Update fidelity and delta_F
+        fidelities[n + 1] = abs(inner_product_cl10(phi_in, phi));
+        delta_F = 1.0 - fidelities[n + 1];
+        current_period++;
+    }
 
+    double omega_ang_end(int n) {
+        // Approximate omega_ang modulation at period end n
+        // Adjust with actual formula if desired
+        return 0.0;
+    }
 
-        sp_cx_mat H_energy;
-        if (is_ang == false) {
-            H_energy = hamiltonian_cl10_90_spiral_twist(J, ht_eff_end, 0); // Energy at h1
-        } else {
-            H_energy = hamiltonian_cl10_90_spiral_twist(J, ht_eff_end, omega_ang_end); // Energy at h1
-        } 
+    double h_effective_end(int n) {
+        // Approximate effective h1 at period end n
+        return 0.0;
+    }
 
-
-        fidelities(n + 1) = abs(inner_product_cl10(phi_in, phi));
-        fidelity_window[n % W] = fidelities(n + 1);
-
-
-        double stabilizer = compute_avg_stabilizer(phi);
-        cx_mat Hphi = mat_vec_mult_cl10(H_energy, phi);
-
-        double sx_energy = 0.0;
-        for (int i = 0; i < N; i++) {
-            sx_energy -= ht_eff_end * 2.0 * real(phi(i * D, 0) * conj(phi(i * D + 1, 0)));
-        }
-        
-        double zz_energy;
-        if (is_ang == false) {
-            zz_energy = compute_zz_energy(phi, J, 0, 0);
-        } else {
-            zz_energy = compute_zz_energy(phi, J, omega_ang_end, (n+1), true);
-        }
-        double energy = sx_energy + zz_energy;
-
+    double sx_avg(int n) {
+        // Compute sx average at period n (rough estimation)
         double sx_sum = 0.0;
         for (int i = 0; i < N; i++) {
             sx_sum += 2.0 * real(phi(i * D, 0) * conj(phi(i * D + 1, 0)));
         }
-        double sx_avg = sx_sum / N;
+        return sx_sum / N;
+    }
 
+    //----------------------------------------------------------------
+    // Add a logical qubit at (x,y) on lattice, return its ID
+    uint32_t add_qubit(uint32_t x, uint32_t y) {
+        logical_qubits.push_back({x, y});
+        return logical_qubits.size() - 1;
+    }
 
-        fout << n + 1 << "," << fidelities(n + 1) << "," << stabilizer << "," << energy << "," << sx_energy << "," << zz_energy << "," << delta_F << "," << ht_eff_end << "," << sx_avg << "\n";
-        cout << "Period " << n + 1 << ": Fidelity = " << fidelities(n + 1) << ", Stabilizer = " << stabilizer 
-             << ", Energy = " << energy << ", Delta_F = " << delta_F << "\n";
-        cout << "sx_energy = " << sx_energy << ", zz_energy = " << zz_energy << ", sx_avg = " << sx_avg << ", ht_eff_end = " << ht_eff_end  << "\n";
-        if (n % 2 == 1 && fidelities(n + 1) > 0.9) {
-            cout << "Period-doubling at " << n + 1 << "T, Fidelity = " << fidelities(n + 1) << "\n";
+    //----------------------------------------------------------------
+    // Run N Floquet periods, updating the quantum state.
+    // This calls step_period() N times internally.
+    void run_periods(uint32_t N_periods) {
+        double dummy_deltaF = 0.0;
+        for (uint32_t i = 0; i < N_periods; i++) {
+            step_period(current_period, dummy_deltaF);
+            current_period++;
+        }
+    }
+
+    //----------------------------------------------------------------
+    // Apply logical X gate: global pi pulse on even periods only.
+    void apply_global_pi_pulse_on_even_cycles() {
+        if (current_period % 2 == 0) {
+            std::cout << "Applying logical X (global pi pulse) at period " << current_period << "\n";
+            global_pi_pulse();
+        } else {
+            std::cout << "Skipping logical X on odd period " << current_period << "\n";
+        }
+    }
+
+    // Helper that flips all qubits' sigma_x basis amplitudes (pi rotation around X)
+    // This implements global pi pulse (logical X) on full lattice
+    void global_pi_pulse() {
+        for (int i = 0; i < N; i++) {
+            // Swap amplitudes of |0> and |1> (indices i*D, i*D+1)
+            cx_double temp = phi(i * D, 0);
+            phi(i * D, 0) = phi(i * D + 1, 0);
+            phi(i * D + 1, 0) = temp;
+        }
+    }
+
+    //----------------------------------------------------------------
+    // Measure logical qubit even cycle population (|0⟩_L) for qubit with ID qid
+    // Here we define it as the population sum over physical qubits on one sublattice (even or odd)
+    // For demonstration, assume logical qubit center vicinity defines the measurement region
+    double measure_even_population(uint32_t qid) {
+        if (qid >= logical_qubits.size()) {
+            std::cerr << "Invalid logical qubit ID\n";
+            return 0.0;
+        }
+        const LogicalQubit& q = logical_qubits[qid];
+
+        // Define a measurement radius: count qubits within Manhattan radius R of center
+        const int R = 3; // example radius, can adjust as needed
+
+        double pop_sum = 0.0;
+        int count = 0;
+
+        for (int row = 0; row < rows; ++row) {
+            for (int col = 0; col < cols; ++col) {
+                int dist = abs((int)row - (int)q.center_y) + abs((int)col - (int)q.center_x);
+                if (dist <= R && ((row + col) % 2 == 0)) { // even sublattice check (|0⟩ neighbors)
+                    int i = row * cols + col;
+                    pop_sum += std::norm(phi(i * D, 0)); // probability amplitude squared of |0⟩ component
+                    count++;
+                }
+            }
         }
 
-        /*
-        if (fidelities(n + 1) < 0.9) {
-            break;//break early if less than threshold
-        }*/
+        if (count == 0) return 0.0;
+        return pop_sum / count; // average population on even sublattice near logical qubit
     }
-    fout.close();
-}
+
+private:
+    //helper functions
+
+    cx_mat mat_vec_mult_cl10(const sp_cx_mat& H, const cx_mat& phi) {
+        return H * phi;
+    }
+
+    double inner_product_cl10(const cx_mat& phi1, const cx_mat& phi2) {
+        cx_double prod = as_scalar(phi1.t() * phi2);
+        return real(prod);
+    }
+
+    void compute_nonzero_indices(double J, double ht, int rows, int cols, int D,
+                                umat& locations, cx_vec& values, uint& nz) {
+        const int N = rows * cols;
+        const int NNZ = 6 * N + 2 * rows * cols + 2 * rows * cols; // 5400
+        nz = 0;
+
+        if (locations.n_cols < NNZ || values.n_elem < NNZ) {
+            cerr << "Error: Arrays too small. Required: " << NNZ
+                 << ", Got: " << locations.n_cols << "\n";
+            return;
+        }
+
+        for (int i = 0; i < N; i++) {
+            locations(0, nz) = i * D;     locations(1, nz) = i * D + 1; values(nz) = -ht; nz++;
+            locations(0, nz) = i * D + 1; locations(1, nz) = i * D;     values(nz) = -ht; nz++;
+        }
+
+        for (int row = 0; row < rows; row++) {
+            for (int col = 0; col < cols; col++) {
+                int i = row * cols + col;
+                int j_right = row * cols + ((col + 1) % cols);
+                int j_down = ((row + 1) % rows) * cols + col;
+
+                if (j_right > i || (j_right < i && col == cols - 1)) {
+                    locations(0, nz) = i * D;     locations(1, nz) = j_right * D;     values(nz) = -J; nz++;
+                    locations(0, nz) = i * D + 1; locations(1, nz) = j_right * D + 1; values(nz) = -J; nz++;
+                }
+
+                if (j_down > i || (j_down < i && row == rows - 1)) {
+                    locations(0, nz) = i * D;     locations(1, nz) = j_down * D;     values(nz) = -J; nz++;
+                    locations(0, nz) = i * D + 1; locations(1, nz) = j_down * D + 1; values(nz) = -J; nz++;
+                }
+            }
+        }
+    }
+
+    double compute_zz_energy(const cx_mat& phi, double J, double omega_ang, double period, bool is_ang = false) {
+        double energy = 0.0;
+        double theta_max_base = M_PI / 512;
+        double theta_max = theta_max_base * (1.0 - cos(M_PI * period / 2.0)) / 2.0;
+
+        double center_x = cols / 2.0, center_y = rows / 2.0;
+        double r_max = sqrt(center_x * center_x + center_y * center_y);
+        double norm_factor = sqrt(rows * cols);
+
+        for (int row = 0; row < rows; row++) {
+            for (int col = 0; col < cols; col++) {
+                int i = row * cols + col;
+                int j_right = row * cols + ((col + 1) % cols);
+                int j_down = ((row + 1) % rows) * cols + col;
+
+                double r = sqrt(pow(row - center_y, 2) + pow(col - center_x, 2));
+                double phi_ang = atan2(row - center_y, col - center_x);
+                double theta = (omega_ang == 0) ? 0 : theta_max * (r / r_max) * cos(omega_ang * phi_ang);
+
+                cx_double J_twist;
+                if (is_ang) {
+                    J_twist = J * cx_double(0, sin(theta));
+                    energy += imag(J_twist * (phi(i * D, 0) - phi(i * D + 1, 0)) * norm_factor * (phi(j_right * D, 0) - phi(j_right * D + 1, 0)) * norm_factor);
+                    energy += imag(J_twist * (phi(i * D, 0) - phi(i * D + 1, 0)) * norm_factor * (phi(j_down * D, 0) - phi(j_down * D + 1, 0)) * norm_factor);
+                } else {
+                    J_twist = J;
+                    energy += real(J_twist * (phi(i * D, 0) - phi(i * D + 1, 0)) * norm_factor * (phi(j_right * D, 0) - phi(j_right * D + 1, 0)) * norm_factor);
+                    energy += real(J_twist * (phi(i * D, 0) - phi(i * D + 1, 0)) * norm_factor * (phi(j_down * D, 0) - phi(j_down * D + 1, 0)) * norm_factor);
+                }
+            }
+        }
+        return energy;
+    }
+
+    cx_mat compute_zz_energy_vector(const cx_mat& phi, double J, double omega_ang, double period, bool is_ang = false) {
+        cx_mat Hzz_phi = zeros<cx_mat>(N * D, 1);
+
+        double theta_max_base = M_PI / 512;
+        double theta_max = theta_max_base * (1.0 - cos(M_PI * period / 2.0)) / 2.0;
+
+        double center_x = cols / 2.0, center_y = rows / 2.0;
+        double r_max = sqrt(center_x * center_x + center_y * center_y);
+        double norm_factor = sqrt(N);
+
+        for (int row = 0; row < rows; row++) {
+            for (int col = 0; col < cols; col++) {
+                int i = row * cols + col;
+                int j_right = row * cols + ((col + 1) % cols);
+                int j_down = ((row + 1) % rows) * cols + col;
+
+                double r = sqrt(pow(row - center_y, 2) + pow(col - center_x, 2));
+                double phi_ang = atan2(row - center_y, col - center_x);
+                double theta = (omega_ang == 0) ? 0 : theta_max * (r / r_max) * cos(omega_ang * phi_ang);
+
+                cx_double J_twist = is_ang ? J * cx_double(0, sin(theta)) : J;
+
+                cx_double z_jr = (phi(j_right * D, 0) - phi(j_right * D + 1, 0)) * norm_factor;
+                cx_double z_jd = (phi(j_down * D, 0) - phi(j_down * D + 1, 0)) * norm_factor;
+
+                Hzz_phi(i * D, 0) = J_twist * (z_jr + z_jd) * phi(i * D, 0);
+                Hzz_phi(i * D + 1, 0) = J_twist * (-z_jr - z_jd) * phi(i * D + 1, 0);
+            }
+        }
+        return Hzz_phi;
+    }
+
+    void compute_nonzero_indices_spiral_twist(double J, double ht, int rows, int cols, int D, double omega_ang,
+                                              umat& locations, cx_vec& values, uint& nz) {
+        int N = rows * cols;
+        const int NNZ = 2 * N; // 2N for sigma^x
+
+        nz = 0;
+
+        for (int i = 0; i < N; i++) {
+            locations(0, nz) = i * D;     locations(1, nz) = i * D + 1; values(nz) = -ht; nz++;
+            locations(0, nz) = i * D + 1; locations(1, nz) = i * D;     values(nz) = -ht; nz++;
+        }
+    }
+
+    sp_cx_mat hamiltonian_cl10_90_spiral_twist(double J, double ht, double omega_ang) {
+        int N_local = rows * cols;
+        const int NNZ = 2 * N_local;
+        umat locations(2, NNZ);
+        cx_vec values(NNZ);
+        uint nz;
+        compute_nonzero_indices_spiral_twist(J, ht, rows, cols, D, omega_ang, locations, values, nz);
+        return sp_cx_mat(locations.submat(0, 0, 1, nz - 1), values.subvec(0, nz - 1), N_local * D, N_local * D);
+    }
+
+    double compute_avg_stabilizer(const cx_mat& phi) {
+        double stab_sum = 0.0;
+        int count = 0;
+
+        for (int row = 0; row < rows; row++) {
+            for (int col = 0; col < cols; col++) {
+                int i = row * cols + col;
+                int j_right = row * cols + ((col + 1) % cols);
+                int j_down = ((row + 1) % rows) * cols + col;
+
+                double zi = abs(phi(i * D, 0) - phi(i * D + 1, 0));
+                double zj_right = abs(phi(j_right * D, 0) - phi(j_right * D + 1, 0));
+                double zj_down = abs(phi(j_down * D, 0) - phi(j_down * D + 1, 0));
+
+                stab_sum += zi * zj_right + zi * zj_down;
+                count += 2;
+            }
+        }
+        return stab_sum / count;
+    }
+};
 
 int main() {
-    //double J = 0.3, h0 = 0, h1 =2.5/4.4, omega = 20.0, T =  datum::pi;//optimized
-    double J = 0.3, h0 = 0, h1 =2.5/4.4, omega = 20 * 2 * datum::pi; double T =  2 * datum::pi / omega;
-    //double J = 4.4, h0 = 0, h1 =2.5, omega = 2.0, T =  datum::pi;//unoptimized
-
-    vector<double> sx_gains = {0, 500, 1000, 1500, 1900, 2500, 3000};
-    //vector<double> omegas = {20, 50, 100, 150, 200, 250, 300, 350, 400};
-    vector<double> omegas = {20, 50, 100, 150, 200, 250, 300, 350, 400};
-    int steps = 200, N_max = 5000;   double sx_gain = 1900;
-    bool is_ang = true;
-    /*
-    for(int i =0; i<sx_gains.size();i++){
-        floquet_cl10_90(J, h0, h1, omega, T, steps, N_max, sx_gains[i]);
-    }*/
-    floquet_cl10_90(J, h0, h1, omega, T, steps, N_max, sx_gain, is_ang);
-
-    /*
-    for(int i =17000; i<=30000;i+=50){
-        floquet_cl10_90(J, h0, h1, i, T, steps, N_max, sx_gain, is_ang);
-    }*/
-
+    SpiralVM vm(30, 30);
+    vm.initialize_state("neel");
+    vm.run_floquet(5000, "neel");
     return 0;
 }

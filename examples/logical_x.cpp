@@ -1,6 +1,6 @@
 // examples/logical_x.cpp
 // Demonstrates logical X gate via timed global π-pulse (even cycles only)
-#include "../src/spiral_vm.hpp"
+#include "../src/spiral_vm_core.hpp"
 #include <iostream>
 
 int main() {

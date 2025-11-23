@@ -10,6 +10,13 @@ Macroscopic Néel cat states that refuse to die — for millions of cycles, on r
 **No ancillas. No syndrome extraction. No per-qubit control.**  
 Logical qubits and universal gates are pure software: tiny scheduled modulations of the same periodic drive.
 
+The logical qubit is encoded in a degenerate Floquet-protected manifold approximated by macroscopic cat states:
+
+$$
+|0_L\rangle \approx \frac{| \uparrow\uparrow \cdots \uparrow \rangle + |\downarrow\downarrow\cdots\downarrow\rangle}{\sqrt{2}}, \quad
+|1_L\rangle \approx \frac{| \uparrow\uparrow \cdots \uparrow \rangle - |\downarrow\downarrow\cdots\downarrow\rangle}{\sqrt{2}}.
+$$
+
 This is not a quantum error-correcting code.  
 This is the physics itself, made fault-tolerant.
 

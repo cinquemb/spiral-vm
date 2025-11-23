@@ -112,6 +112,7 @@ public:
         cout << "Initial norm: " << norm0 << "\n";
     }
 
+    // Full Floquet evolution running N_max periods, saved to filename
     void run_floquet(int N_max, const string& initial_state) {
         ofstream fout;
         stringstream fname;
@@ -153,13 +154,14 @@ public:
         fout.close();
     }
 
+    // RK4 integration over one Floquet period n updating state phi and fidelity delta_F
     void step_period(int n, double &delta_F) {
         double dt = T / steps;
         double delta_F_target = 1.0;
 
         cx_mat phi_new = phi;
 
-        double k_bA = 0.0;
+        double k_bA = 0.0; // feedback gain parameter (adjust as needed)
         double h1_limit = 10000.0;
         double h1_f_gain = 0.0;
         double k_oA = 1.0;
@@ -219,20 +221,45 @@ public:
     }
 
     double omega_ang_end(int n) {
+        // Compute omega_ang modulation at the end of period n
+        // Use the base omega_ang ramp plus quasi-periodic corrections
+        // According to the modulation formula in step_period()
+
+        // Time corresponding to end of period n
         double t_end = n * T;
+
+        // Base ramp omega_ang (set externally via ramp_omega_ang)
+        // Assuming you maintain omega_ang_base as current base frequency
         double base = omega_ang_base;
-        double omega_omega_angA = omega;
-        double omega_omega_angB = 2 * omega;
+
+        // Quasi-periodic modulation terms
+        double omega_omega_angA = omega;       // fundamental drive frequency
+        double omega_omega_angB = 2 * omega;   // second harmonic
+
         double alpha_ang = is_ang ? 1.0 : 0.0;
+
         double quasi = alpha_ang * (sin(omega_omega_angA * M_PI * t_end / T) +
                                     sin(omega_omega_angB * M_PI * t_end / T));
+
+        // Feedback and additional modulations could be included if needed
+
         return base + quasi;
     }
 
     double h_effective_end(int n) {
+        // Approximate effective transverse field h1 at period end n
+        // Using h0 and h1 combined with cosine modulation at omega*(t/2 + phase)
+        // According to the formula in step_period()
+
         double t_end = n * T;
+
+        // Compute oscillating part of h1
         double h1_osc = h1 * cos(omega * (t_end / 2.0) + M_PI / 4.0);
+
+        // Total effective field including constant h0
         double h_eff = h0 + h1_osc;
+
+        // Clamp h_eff within limits if necessary (same as in step_period)
         double h1_limit = 10000.0;
 
         if (h_eff / J > h1_limit) h_eff = h1_limit * J;
@@ -242,6 +269,7 @@ public:
     }
 
     double sx_avg(int n) {
+        // Compute sx average at period n (rough estimation)
         double sx_sum = 0.0;
         for (int i = 0; i < N; i++) {
             sx_sum += 2.0 * real(phi(i * D, 0) * conj(phi(i * D + 1, 0)));
@@ -249,13 +277,14 @@ public:
         return sx_sum / N;
     }
 
-    //------------------------------------------------------------------------
-    // Add logical qubit and update phys->logical mapping if overlap enabled
+    //----------------------------------------------------------------
+    // Add a logical qubit at (x,y) on lattice, return its ID
     uint32_t add_qubit(uint32_t x, uint32_t y) {
-        uint32_t qid = logical_qubits.size();
         logical_qubits.push_back({x, y});
+        uint32_t qid = logical_qubits.size() - 1;
 
         if (overlap_enabled) {
+            // Register physical qubits in radius R neighborhood for overlap tracking
             for (int row = (int)y - R; row <= (int)y + R; ++row) {
                 if (row < 0 || row >= rows) continue;
                 for (int col = (int)x - R; col <= (int)x + R; ++col) {
@@ -265,11 +294,12 @@ public:
                 }
             }
         }
-
         return qid;
     }
 
-    //------------------------------------------------------------------------
+    //----------------------------------------------------------------
+    // Run N Floquet periods, updating the quantum state.
+    // This calls step_period() N times internally.
     void run_periods(uint32_t N_periods) {
         double dummy_deltaF = 0.0;
         for (uint32_t i = 0; i < N_periods; i++) {
@@ -278,6 +308,8 @@ public:
         }
     }
 
+    //----------------------------------------------------------------
+    // Apply logical X gate: global pi pulse on even periods only.
     void apply_global_pi_pulse_on_even_cycles() {
         if (current_period % 2 == 0) {
             std::cout << "Applying logical X (global pi pulse) at period " << current_period << "\n";
@@ -287,14 +319,21 @@ public:
         }
     }
 
+    // Helper that flips all qubits' sigma_x basis amplitudes (pi rotation around X)
+    // This implements global pi pulse (logical X) on full lattice
     void global_pi_pulse() {
         for (int i = 0; i < N; i++) {
+            // Swap amplitudes of |0> and |1> (indices i*D, i*D+1)
             cx_double temp = phi(i * D, 0);
             phi(i * D, 0) = phi(i * D + 1, 0);
             phi(i * D + 1, 0) = temp;
         }
     }
 
+    //----------------------------------------------------------------
+    // Measure logical qubit even cycle population (|0⟩_L) for qubit with ID qid
+    // Here we define it as the population sum over physical qubits on one sublattice (even or odd)
+    // For demonstration, assume logical qubit center vicinity defines the measurement region
     double measure_even_population(uint32_t qid) {
         if (qid >= logical_qubits.size()) {
             std::cerr << "Invalid logical qubit ID\n";
@@ -308,18 +347,19 @@ public:
         for (int row = 0; row < rows; ++row) {
             for (int col = 0; col < cols; ++col) {
                 int dist = abs((int)row - (int)q.center_y) + abs((int)col - (int)q.center_x);
-                if (dist <= R && ((row + col) % 2 == 0)) {
+                if (dist <= R && ((row + col) % 2 == 0)) { // even sublattice check (|0⟩ neighbors)
                     int i = row * cols + col;
-                    pop_sum += std::norm(phi(i * D, 0));
+                    pop_sum += std::norm(phi(i * D, 0)); // probability amplitude squared of |0⟩ component
                     count++;
                 }
             }
         }
 
         if (count == 0) return 0.0;
-        return pop_sum / count;
+        return pop_sum / count; // average population on even sublattice near logical qubit
     }
 
+    // Apply a global phase shift (logical S gate or arbitrary phase rotation) to the entire quantum state
     void apply_phase_shift(double angle) {
         cx_double phase_factor = std::exp(cx_double(0, angle));
         for (int i = 0; i < N * D; i++) {
@@ -327,15 +367,20 @@ public:
         }
     }
 
+    // Apply a phase kick (controlled ZZ-type phase interaction) between two logical qubits
+    // qid1, qid2 - indices of logical qubits
+    // strength - phase strength parameter
+    // duration_fraction - fraction of Floquet period T for which the phase kick acts
     void apply_phase_kick_between(uint32_t qid1, uint32_t qid2, double strength, double duration_fraction) {
         if (qid1 >= logical_qubits.size() || qid2 >= logical_qubits.size()) {
             std::cerr << "Invalid logical qubit IDs for phase kick.\n";
             return;
         }
+
         const LogicalQubit& q1 = logical_qubits[qid1];
         const LogicalQubit& q2 = logical_qubits[qid2];
 
-        // Identify physical qubits in neighborhoods
+        // Loop over physical qubits in neighborhoods of q1 and q2
         for (int row1 = q1.center_y - R; row1 <= q1.center_y + R; ++row1) {
             if (row1 < 0 || row1 >= rows) continue;
             for (int col1 = q1.center_x - R; col1 <= q1.center_x + R; ++col1) {
@@ -348,6 +393,16 @@ public:
 
                         int i1 = row1 * cols + col1;
                         int i2 = row2 * cols + col2;
+
+                        // To implement a controlled phase kick that imparts a phase only when both physical qubits are in |1⟩:
+                        // The full wavefunction component amplitude for |1⟩ states at i1, i2 is approx:
+                        // phi(i1*D+1,0) * phi(i2*D+1,0)
+                        //
+                        // We apply a phase factor exp(i * strength * duration_fraction) on such components.
+
+                        // Multiply the amplitude components |1> of each physical qubit by the phase factor.
+                        // Since the full tensor product is not explicit, we approximate by applying the phase individually to the |1> amplitudes.
+                        // A more exact treatment would require operating on full tensor product basis.
 
                         cx_double phase = std::exp(cx_double(0, strength * duration_fraction));
 
@@ -358,16 +413,19 @@ public:
             }
         }
 
-        // Normalize state vector
+        // Normalize state vector to prevent norm drift from numerical operations
         double norm = sqrt(real(inner_product_cl10(phi, phi)));
         phi /= norm;
     }
 
+    // Compute the logical ZZ correlation between two logical qubits qid1 and qid2
+    // Returns the expectation value ⟨Z⊗Z⟩ averaged over physical qubits in their neighborhoods
     double logical_zz_correlation(uint32_t qid1, uint32_t qid2) {
         if (qid1 >= logical_qubits.size() || qid2 >= logical_qubits.size()) {
             std::cerr << "Invalid logical qubit IDs for ZZ correlation measurement.\n";
             return 0.0;
         }
+
         const LogicalQubit& q1 = logical_qubits[qid1];
         const LogicalQubit& q2 = logical_qubits[qid2];
 
@@ -376,30 +434,42 @@ public:
 
         for (int row1 = q1.center_y - R; row1 <= q1.center_y + R; ++row1) {
             if (row1 < 0 || row1 >= rows) continue;
+
             for (int col1 = q1.center_x - R; col1 <= q1.center_x + R; ++col1) {
                 if (col1 < 0 || col1 >= cols) continue;
 
                 for (int row2 = q2.center_y - R; row2 <= q2.center_y + R; ++row2) {
                     if (row2 < 0 || row2 >= rows) continue;
+
                     for (int col2 = q2.center_x - R; col2 <= q2.center_x + R; ++col2) {
                         if (col2 < 0 || col2 >= cols) continue;
 
                         int i1 = row1 * cols + col1;
                         int i2 = row2 * cols + col2;
 
+                        // Compute Z expectation value on physical qubits:
+                        // Z = |0⟩⟨0| - |1⟩⟨1|, so expectation is P_0 - P_1 = |φ_0|^2 - |φ_1|^2
                         double z_expect_i1 = std::norm(phi(i1 * D, 0)) - std::norm(phi(i1 * D + 1, 0));
                         double z_expect_i2 = std::norm(phi(i2 * D, 0)) - std::norm(phi(i2 * D + 1, 0));
+
+                        // Accumulate their product
                         sum_correlation += z_expect_i1 * z_expect_i2;
                         count++;
                     }
                 }
             }
         }
-        if (count == 0) return 0.0;
 
+        if (count == 0) {
+            return 0.0;
+        }
+
+        // Return average expectation over physical qubit pairs
         return sum_correlation / count;
     }
 
+    // Get the logical phase of a qubit qid (extract relative phase of logical |1> component)
+    // This measures the average phase angle of the physical |1⟩ amplitudes in the logical qubit neighborhood
     double get_logical_phase(uint32_t qid) {
         if (qid >= logical_qubits.size()) {
             std::cerr << "Invalid logical qubit ID for get_logical_phase.\n";
@@ -417,46 +487,63 @@ public:
                 int i = row * cols + col;
                 std::complex<double> amp1 = phi(i * D + 1, 0);
                 if (std::abs(amp1) > 1e-12) {
+                    // Add normalized phase factor of |1⟩ amplitude relative to |0⟩
                     std::complex<double> relative_phase = amp1 / std::abs(amp1);
                     phase_sum += relative_phase;
                     count++;
                 }
             }
         }
+
         if (count == 0) return 0.0;
 
         std::complex<double> avg_phase = phase_sum / static_cast<double>(count);
-        return std::arg(avg_phase);
+
+        return std::arg(avg_phase);  // return average phase angle in radians
     }
 
+    // Ramp the omega_ang parameter linearly from start to end over a specified duration in seconds.
+    // This performs a gradual change of the modulation frequency omega_ang during the simulation.
+    // The ramp is implemented by dividing the total duration into discrete Floquet periods,
+    // and updating omega_ang_base incrementally each period, running the system evolution step_period.
     void ramp_omega_ang(double start, double end, double duration_seconds) {
+        // Calculate the total number of Floquet periods corresponding to duration_seconds
         double total_periods = duration_seconds / T;
-        if (total_periods < 1) total_periods = 1;
+        if (total_periods < 1) total_periods = 1;  // At least one period to avoid division by zero
 
+        // Compute the total change in omega_ang to be applied in steps
         double omega_ang_delta = end - start;
+        // Divide the total change evenly by the number of periods to find the increment per period
         double omega_ang_step = omega_ang_delta / total_periods;
 
+        // Incrementally ramp omega_ang_base over the calculated number of periods
         for (int step = 0; step < static_cast<int>(total_periods); ++step) {
-            omega_ang_base = start + omega_ang_step * step;
-            double dummy_deltaF = 0.0;
-            step_period(current_period, dummy_deltaF);
-            current_period++;
+            omega_ang_base = start + omega_ang_step * step;  // Update omega_ang_base for this step
+            double dummy_deltaF = 0.0;                         // Placeholder for fidelity change (unused here)
+            step_period(current_period, dummy_deltaF);        // Perform one Floquet period evolution step
+            current_period++;                                  // Advance to next period count
         }
+        // Finally, set omega_ang_base exactly to the target end value to avoid numerical drift
         omega_ang_base = end;
     }
 
+    // Print statistics about physical qubit participation in logical qubits when overlap mode is enabled.
+    // For each physical qubit, it counts how many logical qubits include that physical qubit in their neighborhoods.
+    // If a physical qubit belongs to more than one logical qubit, it prints its index and the count,
+    // allowing inspection of the degree of neighborhood overlap in the system.
     void print_overlap_stats() {
         if (!overlap_enabled) {
             std::cout << "Overlap mode is disabled.\n";
-            return;
+            return;  // No overlap data to report if mode is off
         }
         for (int i = 0; i < N; i++) {
-            int count = phys_to_logicals[i].size();
+            int count = phys_to_logicals[i].size();  // Number of logical qubits associated with physical qubit i
             if (count > 1) {
                 std::cout << "Physical qubit " << i << " belongs to " << count << " logical qubits.\n";
             }
         }
     }
+
 
 private:
     cx_mat mat_vec_mult_cl10(const sp_cx_mat& H, const cx_mat& phi) {

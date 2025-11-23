@@ -30,7 +30,7 @@ This is the physics itself, made fault-tolerant.
 | `src/`          | Full C++17 physics engine + SpiralVM compiler core                          |
 | `sherbrooke/`   | Exact Qiskit circuits + IBM job IDs for the million-gate run                |
 | `hardware/`     | $43k open ion-trap & neutral-atom reference designs (KiCAD + BOM)           |
-| `examples/`     | Logical X, Z, CZ, T, Bell, Grover, Shor kernels (added weekly)              |
+| `examples/`     | Logical X, Z, CZ, T, Bell, Grover, Shor kernels (ongoing)                   |
 
 ### Build & run (Ubuntu/Debian)
 ```bash

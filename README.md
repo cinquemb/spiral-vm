@@ -1,7 +1,6 @@
 # SpiralVM
 **The world's first 1:1 overhead, topologically protected, universal quantum virtual machine**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 ![C++17](https://img.shields.io/badge/C++-17-blue)
 ![Armadillo](https://img.shields.io/badge/Armadillo-12.8+-orange)
 

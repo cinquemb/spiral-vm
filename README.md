@@ -41,3 +41,25 @@ mkdir build && cd build
 cmake ..
 make -j$(nproc)
 ./spiralvm_900 --periods 5000 --omega_ang 126.0   # → 0.995+ fidelity
+```
+
+
+### Roadmap & Vision
+
+**Current status:**  
+- The SpiralVM is a work in progress as a high-fidelity, large-scale classical simulator implemented in C++17 with Armadillo, enabling quantum many-body dynamics on 900 qubits with verified long-lived logical qubit fidelity exceeding 0.995 at thousands of Floquet cycles.  
+- Logical qubit abstractions and a compiler core enable universal gates implemented as tiny modulations of a single global periodic drive, without physical ancillas or syndrome extraction.
+
+**Future directions:**  
+- **Qiskit frontend transpiler integration:** Develop a SpiralVM transpiler that takes standard Qiskit circuits as input and outputs Qiskit circuits augmented with SpiralVM-specific logical qubit encodings and gate protocols. After translation, the extended Qiskit circuits can be seamlessly compiled and executed by Qiskit’s native backends on simulators or real hardware.  
+- **Cross-platform virtualization:** Abstract the VM to support multiple quantum software stacks (e.g., Cirq, Amazon Braket) and diverse hardware platforms (superconducting, trapped ions, neutral atoms).  
+- **Pulse-level control:** Investigate direct pulse schedule synthesis compatible with native device control languages to implement spiral twists and periodic drives at the hardware level.  
+- **Scalable FTQC architecture:** Utilize SpiralVM virtualization plus hardware abstraction to demonstrate scalable, resource-efficient fault-tolerant quantum computing at near-term device scales.
+
+---
+
+By combining physics-grounded passive error suppression with software-defined logical operations in a cross-platform virtual machine, SpiralVM aims to democratize access to robust quantum computing far beyond traditional error correction paradigms.
+
+---
+
+Feel free to contribute, experiment, and collaborate!

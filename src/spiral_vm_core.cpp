@@ -19,6 +19,8 @@ sudo apt-get install libopenblas-openmp-dev libarmadillo-dev libblas-dev liblapa
 #include <sstream>
 #include <cmath>
 
+#include "../src/spiral_vm_core.hpp"
+
 using namespace arma;
 using namespace std;
 
@@ -213,15 +215,53 @@ public:
     }
 
     double omega_ang_end(int n) {
-        // Approximate omega_ang modulation at period end n
-        // Adjust with actual formula if desired
-        return 0.0;
+        // Compute omega_ang modulation at the end of period n
+        // Use the base omega_ang ramp plus quasi-periodic corrections
+        // According to the modulation formula in step_period()
+
+        // Time corresponding to end of period n
+        double t_end = n * T;
+
+        // Base ramp omega_ang (set externally via ramp_omega_ang)
+        // Assuming you maintain omega_ang_base as current base frequency
+        double base = omega_ang_base;
+
+        // Quasi-periodic modulation terms
+        double omega_omega_angA = omega;       // fundamental drive frequency
+        double omega_omega_angB = 2 * omega;   // second harmonic
+
+        double alpha_ang = is_ang ? 1.0 : 0.0;
+
+        double quasi = alpha_ang * (sin(omega_omega_angA * M_PI * t_end / T) +
+                                    sin(omega_omega_angB * M_PI * t_end / T));
+
+        // Feedback and additional modulations could be included if needed
+
+        return base + quasi;
     }
 
     double h_effective_end(int n) {
-        // Approximate effective h1 at period end n
-        return 0.0;
+        // Approximate effective transverse field h1 at period end n
+        // Using h0 and h1 combined with cosine modulation at omega*(t/2 + phase)
+        // According to the formula in step_period()
+
+        double t_end = n * T;
+
+        // Compute oscillating part of h1
+        double h1_osc = h1 * cos(omega * (t_end / 2.0) + M_PI / 4.0);
+
+        // Total effective field including constant h0
+        double h_eff = h0 + h1_osc;
+
+        // Clamp h_eff within limits if necessary (same as in step_period)
+        double h1_limit = 10000.0;
+
+        if (h_eff / J > h1_limit) h_eff = h1_limit * J;
+        else if (h_eff / J < -h1_limit) h_eff = -h1_limit * J;
+
+        return h_eff;
     }
+
 
     double sx_avg(int n) {
         // Compute sx average at period n (rough estimation)

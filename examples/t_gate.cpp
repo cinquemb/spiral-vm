@@ -1,6 +1,6 @@
 // examples/t_gate.cpp
 // Implements non-Clifford T-gate via asymmetric twist ramp
-#include "../src/spiral_vm.hpp"
+#include "../src/spiral_vm_core.hpp"
 #include <iostream>
 
 int main() {

@@ -1,6 +1,6 @@
 // examples/bell_state.cpp
 // Creates |00⟩ₗ + |11⟩ₗ using spiral phase kick between two logical qubits
-#include "../src/spiral_vm.hpp"
+#include "../src/spiral_vm_core.hpp"
 #include <iostream>
 
 int main() {

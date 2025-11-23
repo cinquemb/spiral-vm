@@ -55,10 +55,7 @@ sudo apt-get install libopenblas-openmp-dev libarmadillo-dev libblas-dev liblapa
 - Phase 1: Simulator-based Logical Gate Implementation
 Focus on implementing a comprehensive set of logical gates (X, Z, CZ, T, etc.) directly on SpiralVM classical simulator. This ensures full validation, correctness, and benchmarking of logical qubit encodings and gate protocols within a controlled environment.
 
-- Phase 2: Qiskit Integration via Transpiler
-Develop a C++-based Qiskit Python parser that reads standard Qiskit circuits and maps them onto SpiralVM’s logical gate set. Follow this with a C++-Python code generator which converts SpiralVM logical programs back into executable Qiskit circuits augmented with SpiralVM-specific operations.
-
-- Phase 3: Experimental Hardware Validation and Overlap Algorithms
+- Phase 2: Experimental Hardware Validation and Overlap Algorithms
 	- Build algorithms that allow physical qubits to belong to multiple logical qubit neighborhoods, enabling overlaps.  
 	- Update SpiralVM data structures and gate implementations to handle overlapping logical qubit clusters correctly.  
 	- Modify your SpiralVM simulator and Qiskit transpiler to support these overlaps during simulation and circuit generation.  
@@ -67,6 +64,9 @@ Develop a C++-based Qiskit Python parser that reads standard Qiskit circuits and
 	- Test native non-Clifford gates like the T-gate experimentally within overlapping logical qubit settings.  
 	- Develop error mitigation and decoding strategies that manage noise and cross-talk introduced by overlaps.  
 	- Use experimental feedback to improve simulator accuracy and tune gate sequences and parameter ramps.
+
+- Phase 3: Qiskit Integration via Transpiler
+Develop a C++-based Qiskit Python parser that reads standard Qiskit circuits and maps them onto SpiralVM’s logical gate set. Follow this with a C++-Python code generator which converts SpiralVM logical programs back into executable Qiskit circuits augmented with SpiralVM-specific operations.
 
 - Phase 4: User-Facing SpiralVM Frontend for Qiskit
 Build a Python frontend layer around the transpiler, enabling users to write native Qiskit code transparently compiled into SpiralVM-enhanced Qiskit circuits. This approach leverages Qiskit’s core compilation and backend execution stacks while embedding SpiralVM logic.

@@ -38,6 +38,12 @@ public:
     void run_periods(uint32_t n);
     void apply_global_pi_pulse_on_even_cycles();
     double measure_even_population(uint32_t qid);
+    void apply_phase_shift(double angle);
+    void apply_phase_kick_between(uint32_t qid1, uint32_t qid2, double strength, double duration_fraction);
+    void apply_phase_kick_between_full(uint32_t qid1, uint32_t qid2, double strength, double duration_fraction);
+    double logical_zz_correlation(uint32_t qid1, uint32_t qid2);
+    double get_logical_phase(uint32_t qid);
+    void ramp_omega_ang(double start, double end, double duration_seconds);
 
     // Initialization and simulation control
     void initialize_state(const std::string& initial_state = "neel");
@@ -70,14 +76,15 @@ private:
     void global_pi_pulse();
 
     // Helpers for energy, Hamiltonian, etc.
-    // Copy your helper functions here or keep in separate utility files
 
     // e.g.:
     arma::cx_mat mat_vec_mult_cl10(const arma::sp_cx_mat& H, const arma::cx_mat& phi);
     double inner_product_cl10(const arma::cx_mat& phi1, const arma::cx_mat& phi2);
+    double compute_zz_energy(const cx_mat& phi, double J, double omega_ang, double period, bool is_ang = false);
+    cx_mat compute_zz_energy_vector(const cx_mat& phi, double J, double omega_ang, double period, bool is_ang = false);
+    void compute_nonzero_indices_spiral_twist(double J, double ht, int rows, int cols, int D, double omega_ang, umat& locations, cx_vec& values, uint& nz);
     arma::sp_cx_mat hamiltonian_cl10_90_spiral_twist(double J, double ht, double omega_ang);
-
-    // etc...
+    double compute_avg_stabilizer(const cx_mat& phi);
 };
 
 #endif // SPIRAL_COMPILER_HPP

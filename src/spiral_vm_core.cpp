@@ -22,6 +22,11 @@ sudo apt-get install libopenblas-openmp-dev libarmadillo-dev libblas-dev liblapa
 using namespace arma;
 using namespace std;
 
+const int N = 900;
+const int D = 2;
+const int ROWS = 30;
+const int COLS = 30;
+
 class SpiralVM {
 public:
     static constexpr int D = 2;
@@ -299,6 +304,274 @@ public:
         return pop_sum / count; // average population on even sublattice near logical qubit
     }
 
+    // Apply a global phase shift (logical S gate or arbitrary phase rotation) to the entire quantum state
+    void apply_phase_shift(double angle) {
+        cx_double phase_factor = std::exp(cx_double(0, angle));
+        for (int i = 0; i < N * D; i++) {
+            phi(i, 0) *= phase_factor;
+        }
+    }
+
+    // Apply a phase kick (controlled ZZ-type phase interaction) between two logical qubits
+    // qid1, qid2 - indices of logical qubits
+    // strength - phase strength parameter
+    // duration_fraction - fraction of Floquet period T for which the phase kick acts
+    void apply_phase_kick_between(uint32_t qid1, uint32_t qid2, double strength, double duration_fraction) {
+        if (qid1 >= logical_qubits.size() || qid2 >= logical_qubits.size()) {
+            std::cerr << "Invalid logical qubit IDs for phase kick.\n";
+            return;
+        }
+
+        const LogicalQubit& q1 = logical_qubits[qid1];
+        const LogicalQubit& q2 = logical_qubits[qid2];
+
+        // Define physical neighborhood radius around each logical qubit's center
+        const int R = 3;
+
+        // Loop over physical qubits in neighborhoods of q1 and q2
+        for (int row1 = q1.center_y - R; row1 <= q1.center_y + R; ++row1) {
+            if (row1 < 0 || row1 >= rows) continue;
+            for (int col1 = q1.center_x - R; col1 <= q1.center_x + R; ++col1) {
+                if (col1 < 0 || col1 >= cols) continue;
+
+                for (int row2 = q2.center_y - R; row2 <= q2.center_y + R; ++row2) {
+                    if (row2 < 0 || row2 >= rows) continue;
+                    for (int col2 = q2.center_x - R; col2 <= q2.center_x + R; ++col2) {
+                        if (col2 < 0 || col2 >= cols) continue;
+
+                        int i1 = row1 * cols + col1;
+                        int i2 = row2 * cols + col2;
+
+                        // To implement a controlled phase kick that imparts a phase only when both physical qubits are in |1⟩:
+                        // The full wavefunction component amplitude for |1⟩ states at i1, i2 is approx:
+                        // phi(i1*D+1,0) * phi(i2*D+1,0)
+                        //
+                        // We apply a phase factor exp(i * strength * duration_fraction) on such components.
+
+                        // Multiply the amplitude components |1> of each physical qubit by the phase factor.
+                        // Since the full tensor product is not explicit, we approximate by applying the phase individually to the |1> amplitudes.
+                        // A more exact treatment would require operating on full tensor product basis.
+
+                        cx_double phase = std::exp(cx_double(0, strength * duration_fraction));
+
+                        phi(i1 * D + 1, 0) *= phase;
+                        phi(i2 * D + 1, 0) *= phase;
+                    }
+                }
+            }
+        }
+
+        // Normalize state vector to prevent norm drift from numerical operations
+        double norm = sqrt(real(inner_product_cl10(phi, phi)));
+        phi /= norm;
+    }
+
+
+    // Apply controlled phase kick exactly via sparse operator multiplication
+    void apply_phase_kick_between_full(uint32_t qid1, uint32_t qid2, double strength, double duration_fraction) {
+        if (qid1 >= logical_qubits.size() || qid2 >= logical_qubits.size()) {
+            std::cerr << "Invalid logical qubit IDs for full phase kick.\n";
+            return;
+        }
+
+        const LogicalQubit& q1 = logical_qubits[qid1];
+        const LogicalQubit& q2 = logical_qubits[qid2];
+
+        const int R = 3; // Neighborhood radius
+
+        // Collect physical qubit indices in neighborhoods of logical qubits
+        std::vector<int> physQubits1;
+        for (int row = q1.center_y - R; row <= q1.center_y + R; ++row) {
+            if (row < 0 || row >= rows) continue;
+            for (int col = q1.center_x - R; col <= q1.center_x + R; ++col) {
+                if (col < 0 || col >= cols) continue;
+                physQubits1.push_back(row * cols + col);
+            }
+        }
+
+        std::vector<int> physQubits2;
+        for (int row = q2.center_y - R; row <= q2.center_y + R; ++row) {
+            if (row < 0 || row >= rows) continue;
+            for (int col = q2.center_x - R; col <= q2.center_x + R; ++col) {
+                if (col < 0 || col >= cols) continue;
+                physQubits2.push_back(row * cols + col);
+            }
+        }
+
+        int N_qbits = N * D;  // total qubits
+        uint64_t dim = 1ULL << N_qbits;  // Hilbert space dimension
+
+        // Phase factor for controlled phase kick
+        cx_double phase = std::exp(cx_double(0, strength * duration_fraction));
+
+        // Sparse diagonal operator data
+        arma::umat locations(2, dim);  // row,col indices of nonzero entries
+        arma::cx_vec values(dim);      // diagonal values
+
+        for (uint64_t basis_idx = 0; basis_idx < dim; ++basis_idx) {
+            bool condition_met = true;
+
+            // Check all physical qubits in q1 are |1>
+            for (int pq : physQubits1) {
+                if (((basis_idx >> pq) & 1ULL) == 0) {
+                    condition_met = false;
+                    break;
+                }
+            }
+
+            if (!condition_met) {
+                locations(0, basis_idx) = basis_idx;
+                locations(1, basis_idx) = basis_idx;
+                values(basis_idx) = cx_double(1.0, 0.0);
+                continue;
+            }
+
+            // Check all physical qubits in q2 are |1>
+            for (int pq : physQubits2) {
+                if (((basis_idx >> pq) & 1ULL) == 0) {
+                    condition_met = false;
+                    break;
+                }
+            }
+
+            locations(0, basis_idx) = basis_idx;
+            locations(1, basis_idx) = basis_idx;
+
+            // Apply phase if both neighborhoods are simultaneously all |1>
+            if (condition_met) {
+                values(basis_idx) = phase;
+            } else {
+                values(basis_idx) = cx_double(1.0, 0.0);
+            }
+        }
+
+        // Construct sparse diagonal matrix operator
+        arma::sp_cx_mat phase_op(locations, values, dim, dim);
+
+        // Apply operator to the state vector phi
+        phi = phase_op * phi;
+
+        // Normalize state vector
+        double norm = sqrt(real(inner_product_cl10(phi, phi)));
+        phi /= norm;
+    }
+
+
+    // Compute the logical ZZ correlation between two logical qubits qid1 and qid2
+    // Returns the expectation value ⟨Z⊗Z⟩ averaged over physical qubits in their neighborhoods
+    double logical_zz_correlation(uint32_t qid1, uint32_t qid2) {
+        if (qid1 >= logical_qubits.size() || qid2 >= logical_qubits.size()) {
+            std::cerr << "Invalid logical qubit IDs for ZZ correlation measurement.\n";
+            return 0.0;
+        }
+
+        const LogicalQubit& q1 = logical_qubits[qid1];
+        const LogicalQubit& q2 = logical_qubits[qid2];
+
+        const int R = 3;  // Radius of physical neighborhood to consider
+
+        double sum_correlation = 0.0;
+        int count = 0;
+
+        for (int row1 = q1.center_y - R; row1 <= q1.center_y + R; ++row1) {
+            if (row1 < 0 || row1 >= rows) continue;
+
+            for (int col1 = q1.center_x - R; col1 <= q1.center_x + R; ++col1) {
+                if (col1 < 0 || col1 >= cols) continue;
+
+                for (int row2 = q2.center_y - R; row2 <= q2.center_y + R; ++row2) {
+                    if (row2 < 0 || row2 >= rows) continue;
+
+                    for (int col2 = q2.center_x - R; col2 <= q2.center_x + R; ++col2) {
+                        if (col2 < 0 || col2 >= cols) continue;
+
+                        int i1 = row1 * cols + col1;
+                        int i2 = row2 * cols + col2;
+
+                        // Compute Z expectation value on physical qubits:
+                        // Z = |0⟩⟨0| - |1⟩⟨1|, so expectation is P_0 - P_1 = |φ_0|^2 - |φ_1|^2
+                        double z_expect_i1 = std::norm(phi(i1 * D, 0)) - std::norm(phi(i1 * D + 1, 0));
+                        double z_expect_i2 = std::norm(phi(i2 * D, 0)) - std::norm(phi(i2 * D + 1, 0));
+
+                        // Accumulate their product
+                        sum_correlation += z_expect_i1 * z_expect_i2;
+                        count++;
+                    }
+                }
+            }
+        }
+
+        if (count == 0) {
+            return 0.0;
+        }
+
+        // Return average expectation over physical qubit pairs
+        return sum_correlation / count;
+    }
+
+    // Get the logical phase of a qubit qid (extract relative phase of logical |1> component)
+    // This measures the average phase angle of the physical |1⟩ amplitudes in the logical qubit neighborhood
+    double get_logical_phase(uint32_t qid) {
+        if (qid >= logical_qubits.size()) {
+            std::cerr << "Invalid logical qubit ID for get_logical_phase.\n";
+            return 0.0;
+        }
+        const LogicalQubit& q = logical_qubits[qid];
+
+        const int R = 3;  // radius of physical qubit neighborhood
+
+        std::complex<double> phase_sum(0.0, 0.0);
+        int count = 0;
+
+        for (int row = q.center_y - R; row <= q.center_y + R; ++row) {
+            if (row < 0 || row >= rows) continue;
+            for (int col = q.center_x - R; col <= q.center_x + R; ++col) {
+                if (col < 0 || col >= cols) continue;
+                int i = row * cols + col;
+                std::complex<double> amp0 = phi(i * D, 0);
+                std::complex<double> amp1 = phi(i * D + 1, 0);
+                if (std::abs(amp1) > 1e-12) {
+                    // Add normalized phase factor of |1⟩ amplitude relative to |0⟩
+                    std::complex<double> relative_phase = amp1 / std::abs(amp1);
+                    phase_sum += relative_phase;
+                    count++;
+                }
+            }
+        }
+
+        if (count == 0) return 0.0;
+
+        std::complex<double> avg_phase = phase_sum / static_cast<double>(count);
+
+        return std::arg(avg_phase);  // return average phase angle in radians
+    }
+
+    // Ramp the omega_ang parameter linearly from start to end over duration_seconds seconds,
+    // internally converted to Floquet periods and incrementally updated each short time interval
+    void ramp_omega_ang(double start, double end, double duration_seconds) {
+        // Calculate number of RK4 steps or Floquet steps corresponding to ramp duration
+        double total_periods = duration_seconds / T;
+        if (total_periods < 1) total_periods = 1; // minimum 1 period
+
+        double omega_ang_delta = end - start;
+        double omega_ang_step = omega_ang_delta / total_periods;
+
+        // Ramp omega_ang gradually over the time steps with RK4 splitting
+        for (int step = 0; step < static_cast<int>(total_periods); ++step) {
+            omega_ang_base = start + omega_ang_step * step;
+
+            // One full Floquet period evolution at new omega_ang_base
+            double dummy_deltaF = 0.0;
+            step_period(current_period, dummy_deltaF);
+            current_period++;
+        }
+
+        // After ramp, set omega_ang_base to final value explicitly
+        omega_ang_base = end;
+    }
+
+
+
 private:
     //helper functions
 
@@ -309,42 +582,6 @@ private:
     double inner_product_cl10(const cx_mat& phi1, const cx_mat& phi2) {
         cx_double prod = as_scalar(phi1.t() * phi2);
         return real(prod);
-    }
-
-    void compute_nonzero_indices(double J, double ht, int rows, int cols, int D,
-                                umat& locations, cx_vec& values, uint& nz) {
-        const int N = rows * cols;
-        const int NNZ = 6 * N + 2 * rows * cols + 2 * rows * cols; // 5400
-        nz = 0;
-
-        if (locations.n_cols < NNZ || values.n_elem < NNZ) {
-            cerr << "Error: Arrays too small. Required: " << NNZ
-                 << ", Got: " << locations.n_cols << "\n";
-            return;
-        }
-
-        for (int i = 0; i < N; i++) {
-            locations(0, nz) = i * D;     locations(1, nz) = i * D + 1; values(nz) = -ht; nz++;
-            locations(0, nz) = i * D + 1; locations(1, nz) = i * D;     values(nz) = -ht; nz++;
-        }
-
-        for (int row = 0; row < rows; row++) {
-            for (int col = 0; col < cols; col++) {
-                int i = row * cols + col;
-                int j_right = row * cols + ((col + 1) % cols);
-                int j_down = ((row + 1) % rows) * cols + col;
-
-                if (j_right > i || (j_right < i && col == cols - 1)) {
-                    locations(0, nz) = i * D;     locations(1, nz) = j_right * D;     values(nz) = -J; nz++;
-                    locations(0, nz) = i * D + 1; locations(1, nz) = j_right * D + 1; values(nz) = -J; nz++;
-                }
-
-                if (j_down > i || (j_down < i && row == rows - 1)) {
-                    locations(0, nz) = i * D;     locations(1, nz) = j_down * D;     values(nz) = -J; nz++;
-                    locations(0, nz) = i * D + 1; locations(1, nz) = j_down * D + 1; values(nz) = -J; nz++;
-                }
-            }
-        }
     }
 
     double compute_zz_energy(const cx_mat& phi, double J, double omega_ang, double period, bool is_ang = false) {
@@ -413,8 +650,7 @@ private:
         return Hzz_phi;
     }
 
-    void compute_nonzero_indices_spiral_twist(double J, double ht, int rows, int cols, int D, double omega_ang,
-                                              umat& locations, cx_vec& values, uint& nz) {
+    void compute_nonzero_indices_spiral_twist(double J, double ht, int rows, int cols, int D, double omega_ang, umat& locations, cx_vec& values, uint& nz) {
         int N = rows * cols;
         const int NNZ = 2 * N; // 2N for sigma^x
 

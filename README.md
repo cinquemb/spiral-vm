@@ -20,6 +20,10 @@ This is the physics itself, made fault-tolerant.
 - Subharmonic response 5–6× above noise floor  
 - 900-qubit exact RK4 simulation → **>0.995 fidelity at 5000 periods**
 
+### Paper
+- https://www.vixra.org/abs/2511.0041
+- https://doi.org/10.5281/zenodo.15108309
+
 ### Repository contents
 | Directory       | What’s inside                                                               |
 |-----------------|-----------------------------------------------------------------------------|
@@ -27,7 +31,6 @@ This is the physics itself, made fault-tolerant.
 | `sherbrooke/`   | Exact Qiskit circuits + IBM job IDs for the million-gate run                |
 | `hardware/`     | $43k open ion-trap & neutral-atom reference designs (KiCAD + BOM)           |
 | `examples/`     | Logical X, Z, CZ, T, Bell, Grover, Shor kernels (added weekly)              |
-| `paper/`        | viXra:2511.0041 (v26) + QCNC 2026 submission #132                           |
 
 ### Build & run (Ubuntu/Debian)
 ```bash

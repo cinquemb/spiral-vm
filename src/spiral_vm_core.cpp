@@ -32,6 +32,7 @@ const int COLS = 30;
 class SpiralVM {
 public:
     static constexpr int D = 2;
+    const int R = 1; // Define physical neighborhood radius around each logical qubit's center
     const int rows, cols;         // Lattice dimensions
     const int N;                  // Number of sites
     double J, h0, h1, omega, T;  // Hamiltonian / Floquet parameters
@@ -323,9 +324,6 @@ public:
         }
         const LogicalQubit& q = logical_qubits[qid];
 
-        // Define a measurement radius: count qubits within Manhattan radius R of center
-        const int R = 3; // example radius, can adjust as needed
-
         double pop_sum = 0.0;
         int count = 0;
 
@@ -365,8 +363,6 @@ public:
         const LogicalQubit& q1 = logical_qubits[qid1];
         const LogicalQubit& q2 = logical_qubits[qid2];
 
-        // Define physical neighborhood radius around each logical qubit's center
-        const int R = 3;
 
         // Loop over physical qubits in neighborhoods of q1 and q2
         for (int row1 = q1.center_y - R; row1 <= q1.center_y + R; ++row1) {
@@ -416,8 +412,6 @@ public:
 
         const LogicalQubit& q1 = logical_qubits[qid1];
         const LogicalQubit& q2 = logical_qubits[qid2];
-
-        const int R = 3; // Neighborhood radius
 
         // Collect physical qubit indices in neighborhoods of logical qubits
         std::vector<int> physQubits1;
@@ -508,8 +502,6 @@ public:
         const LogicalQubit& q1 = logical_qubits[qid1];
         const LogicalQubit& q2 = logical_qubits[qid2];
 
-        const int R = 3;  // Radius of physical neighborhood to consider
-
         double sum_correlation = 0.0;
         int count = 0;
 
@@ -557,8 +549,6 @@ public:
             return 0.0;
         }
         const LogicalQubit& q = logical_qubits[qid];
-
-        const int R = 3;  // radius of physical qubit neighborhood
 
         std::complex<double> phase_sum(0.0, 0.0);
         int count = 0;

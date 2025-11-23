@@ -27,14 +27,23 @@ class SpiralVM {
 public:
     SpiralVM(int rows, int cols);  // constructor
 
+    static constexpr int D = 2;
+    const int R = 1; // Physical neighborhood radius around each logical qubit's center
+    const int rows, cols;         // Lattice dimensions
+    const int N;                  // Number of sites
+    double J, h0, h1, omega, T;  // Hamiltonian / Floquet parameters
+    bool is_ang;                 // Spiral angle flag
+    bool overlap_enabled = false; // Overlap mode toggle
+
     // Logical qubit management
-    uint32_t add_qubit(int x, int y);
+    uint32_t add_qubit(uint32_t x, uint32_t y);
 
     // Gate scheduling and application
     void apply_gate(const Gate& g, double period_time);
     void compile_and_run(const std::vector<Gate>& program);
 
     // Functional control
+    void run_floquet(int N_max, const std::string& initial_state);
     void run_periods(uint32_t n);
     void apply_global_pi_pulse_on_even_cycles();
     double measure_even_population(uint32_t qid);
@@ -47,28 +56,32 @@ public:
 
     // Initialization and simulation control
     void initialize_state(const std::string& initial_state = "neel");
+    double omega_ang_end(int n);
+    double h_effective_end(int n);
+    double sx_avg(int n);
+    void print_overlap_stats();
 
 private:
-    int rows_, cols_;
-    int N_;
-    double J_, h0_, h1_, omega_, T_;
-    double omega_ang_base_;
-    double sx_gain_;
+    double omega_ang_base;
 
-    arma::cx_mat phi_;
-    arma::cx_mat phi_in_;
-    int steps_;
-    int current_period_;
+    arma::cx_mat phi;                  // Quantum state vector (2*N x 1)
+    arma::cx_mat phi_in;               // Initial state for fidelity measurement
+    int steps;                   // RK4 steps per period
+    int current_period;          // Tracks Floquet periods elapsed
+    double sx_gain;              // h1 gain parameter
 
-    std::vector<LogicalQubit> logical_qubits_;
+    std::vector<LogicalQubit> logical_qubits;  // Logical qubit list
+
+    // Mapping physical qubits to logical qubits (allows many logicals per physical)
+    std::vector<std::vector<uint32_t>> phys_to_logicals;
 
     // Random engine for state initialization
-    std::mt19937 rng_;
-    std::uniform_real_distribution<double> dist_;
+    std::mt19937 rng;
+    std::uniform_real_distribution<double> dist;
 
     // Fidelity tracking
-    std::vector<double> fidelities_;
-    std::vector<double> fidelity_window_;
+    std::vector<double> fidelities;
+    std::vector<double> fidelity_window;
 
     // Private methods: physics calculations, Floquet step
     void step_period(int n, double& delta_F);
@@ -80,11 +93,11 @@ private:
     // e.g.:
     arma::cx_mat mat_vec_mult_cl10(const arma::sp_cx_mat& H, const arma::cx_mat& phi);
     double inner_product_cl10(const arma::cx_mat& phi1, const arma::cx_mat& phi2);
-    double compute_zz_energy(const cx_mat& phi, double J, double omega_ang, double period, bool is_ang = false);
-    cx_mat compute_zz_energy_vector(const cx_mat& phi, double J, double omega_ang, double period, bool is_ang = false);
-    void compute_nonzero_indices_spiral_twist(double J, double ht, int rows, int cols, int D, double omega_ang, umat& locations, cx_vec& values, uint& nz);
+    double compute_zz_energy(const arma::cx_mat& phi, double J, double omega_ang, double period, bool is_ang = false);
+    arma::cx_mat compute_zz_energy_vector(const arma::cx_mat& phi, double J, double omega_ang, double period, bool is_ang = false);
+    void compute_nonzero_indices_spiral_twist(double J, double ht, int rows, int cols, int D, double omega_ang, arma::umat& locations, arma::cx_vec& values, uint& nz);
     arma::sp_cx_mat hamiltonian_cl10_90_spiral_twist(double J, double ht, double omega_ang);
-    double compute_avg_stabilizer(const cx_mat& phi);
+    double compute_avg_stabilizer(const arma::cx_mat& phi);
 };
 
 #endif // SPIRAL_COMPILER_HPP

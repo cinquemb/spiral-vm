@@ -56,6 +56,15 @@ make -j$(nproc)
 - **Pulse-level control:** Investigate direct pulse schedule synthesis compatible with native device control languages to implement spiral twists and periodic drives at the hardware level.  
 - **Scalable FTQC architecture:** Utilize SpiralVM virtualization plus hardware abstraction to demonstrate scalable, resource-efficient fault-tolerant quantum computing at near-term device scales.
 
+
+- Phase 1: Simulator-based Logical Gate Implementation
+Focus on implementing a comprehensive set of logical gates (X, Z, CZ, T, etc.) directly on your SpiralVM classical simulator. This ensures full validation, correctness, and benchmarking of your logical qubit encodings and gate protocols within a controlled environment.
+
+- Phase 2: Qiskit Integration via Transpiler
+Develop a C++-based Qiskit Python parser that reads standard Qiskit circuits and maps them onto SpiralVM’s logical gate set. Follow this with a C++-Python code generator which converts SpiralVM logical programs back into executable Qiskit circuits augmented with SpiralVM-specific operations.
+
+- Phase 3: User-Facing SpiralVM Frontend for Qiskit
+Build a Python frontend layer around your transpiler, enabling users to write native Qiskit code transparently compiled into SpiralVM-enhanced Qiskit circuits. This approach leverages Qiskit’s core compilation and backend execution stacks while embedding SpiralVM logic.
 ---
 
 By combining physics-grounded passive error suppression with software-defined logical operations in a cross-platform virtual machine, SpiralVM aims to democratize access to robust quantum computing far beyond traditional error correction paradigms.

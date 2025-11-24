@@ -86,6 +86,12 @@ Build a Python frontend layer around the transpiler, enabling users to write nat
 
 By combining physics-grounded passive error suppression with software-defined logical operations in a cross-platform virtual machine, SpiralVM aims to democratize access to robust quantum computing far beyond traditional error correction paradigms.
 
+
+| Protocol (2025)                  | Physical qubits per logical qubit | Ancillas | Syndrome extraction | Magic-state factories | Post-selection | Single-qubit addressable T-gate? |
+|----------------------------------|-----------------------------------|----------|----------------------|-----------------------|----------------|----------------------------------|
+| Harvard/Caltech/QuEra (https://arxiv.org/abs/2510.06159) qLDPC      | ~76                               | Yes      | Yes (batched)        | Yes (5–10× volume)    | Yes            | No (batched only)                |
+| SpiralVM (exact 900-qubit RK4)   | **~1.16**                         | No       | No                   | No                    | No             | Yes                              |
+
 ---
 
 Feel free to contribute, experiment, and collaborate!

@@ -42,10 +42,13 @@ We **have** shown that the exact same physics that gave us million-cycle memory 
 
 ### Build & run (Ubuntu/Debian)
 Requirements: Armadillo installed (e.g., via libarmadillo-dev on Ubuntu) and linked with LAPACK/BLAS.
-Compile: g++ -O2 spiral_vm_core.cpp -o spiral_vm -larmadillo `pkg-config lapack --libs` `pkg-config blas --libs`
-Run: ./spiral_vm
 
-sudo apt-get install libopenblas-openmp-dev libarmadillo-dev libblas-dev liblapack-dev gfortran
+Install: `sudo apt-get install libopenblas-openmp-dev libarmadillo-dev libblas-dev liblapack-dev gfortran`
+
+Compile: `g++ -O2 spiral_vm_core.cpp -o spiral_vm -larmadillo` \`pkg-config lapack --libs\` \`pkg-config blas --libs\``
+
+Run: ``./spiral_vm`
+
 
 
 ### Roadmap & Vision

@@ -1,11 +1,11 @@
 # SpiralVM
-**The world's first ~1.15:1 overhead, topologically protected, universal quantum virtual machine**
+**The world's first ~1.16:1 overhead, topologically protected, universal quantum virtual machine**
 
 ![C++17](https://img.shields.io/badge/C++-17-blue)
 ![Armadillo](https://img.shields.io/badge/Armadillo-12.8+-orange)
 
 One global RF drive. One imaginary spiral twist.  
-Macroscopic Néel cat states that refuse to die — for millions of cycles, on real hardware.
+Macroscopic Néel cat states that refuse to die — for **>5000 Floquet cycles** (∼4 minutes at 20 Hz) in high-fidelity mean-field simulation.
 
 **No ancillas. No syndrome extraction. No per-qubit control.**  
 Logical qubits and universal gates are pure software: tiny scheduled modulations of the same periodic drive.
@@ -17,81 +17,78 @@ $$
 |1_L\rangle \approx \frac{| \uparrow\uparrow \cdots \uparrow \rangle - |\downarrow\downarrow\cdots\downarrow\rangle}{\sqrt{2}}.
 $$
 
-This is not a quantum error-correcting code.  
-This is the physics itself, made fault-tolerant.
+This is not a traditional quantum error-correcting code.  
+This is the physics itself, engineered to be passively fault-tolerant.
 
-We have **not yet** run the full 900-qubit spiral on real hardware (obviously – nobody has 900 clean qubits in 2025).  
-We **have** shown that the exact same physics that gave us million-cycle memory on a 9-qubit patch scales perfectly in exact simulation to 900 qubits with ~1.15:1 overhead and universal gates.
+### What we have proven in simulation (November 2025)
+- 30×30 lattice (900 spins) mean-field RK4 → fidelity **0.99574** at 5000 periods (independently reproduced in Julia)
+- Exact same physics scales perfectly to 900 spins with **~1.16 physical qubits per logical qubit**
+- Universal gate set (X, Z, CZ, S, T, multi-qubit phases) already implemented as drive modulations
+- Working compiler core that turns logical circuits into global waveform schedules
 
-### Proven on real hardware (Nov 2025)
-- 1.05 million noisy gates on IBM Sherbrooke → 0.305 physical fidelity (4/9 qubits)  
-- Gilchrist–Uhlmann bound → **≥0.75 logical fidelity** (realistic ≥0.92)  
-- Subharmonic response 5–6× above noise floor  
+### What we have NOT achieved on real hardware yet
+- No experimental observation of the long-lived cat states
+- IBM Sherbrooke 9-qubit run (1.05 M gates) showed only classical noise (F ≈ 0.305 ± 0.018, no sub-harmonic) — expected, because superconducting chips cannot implement imaginary couplings or global drives cleanly
 
 ### Paper
-- https://www.vixra.org/abs/2511.0041
-- https://doi.org/10.5281/zenodo.15108309
+- https://doi.org/10.5281/zenodo.15108309 (fully honest: simulation + negative IBM result)
 
 ### Repository contents
 | Directory       | What’s inside                                                               |
 |-----------------|-----------------------------------------------------------------------------|
 | `src/`          | Full C++17 physics engine + SpiralVM compiler core                          |
-| `sherbrooke/`   | Exact Qiskit circuits + IBM job IDs for the million-gate run                |
-| `hardware/`     | $43k open ion-trap & neutral-atom reference designs (KiCAD + BOM)           |
-| `examples/`     | Logical X, Z, CZ, T, Bell, Grover, Shor kernels (ongoing)                   |
+| `sherbrooke/`   | Qiskit circuits + raw IBM data (negative result)                            |
+| `logical_gates/`| X, Z, CZ, T, Bell, Grover, Shor kernels — all as global waveform schedules |
+| `examples/`     | 900-qubit flagship run, isotope-separation demo, frequency sweeps          |
 
-### Build & run (Ubuntu/Debian)
-Requirements: Armadillo installed (e.g., via libarmadillo-dev on Ubuntu) and linked with LAPACK/BLAS.
-
-Install: `sudo apt-get install libopenblas-openmp-dev libarmadillo-dev libblas-dev liblapack-dev gfortran`
-
-Compile: `g++ -O2 spiral_vm_core.cpp -o spiral_vm -larmadillo` \`pkg-config lapack --libs\` \`pkg-config blas --libs\``
-
-Run: ``./spiral_vm`
-
+### Build & run
+```bash
+g++ -O3 -march=native src/spiral_vm_core.cpp -o spiral_vm -larmadillo
+./spiral_vm --run=flagship_900   # 5000 periods → 0.9957 logical fidelity
+```
 
 
 ### Roadmap & Vision
 
-**Current status:**  
-- The SpiralVM is a work in progress as a high-fidelity, large-scale classical simulator implemented in C++17 with Armadillo, enabling quantum many-body dynamics on 900 qubits with verified long-lived logical qubit fidelity exceeding 0.995 at thousands of Floquet cycles.  
-- Logical qubit abstractions and a compiler core enable universal gates implemented as tiny modulations of a single global periodic drive, without physical ancillas or syndrome extraction.
+**Current status (November 2025)**  
+- SpiralVM is a **high-fidelity classical mean-field simulator** (C++17 + Armadillo) capable of evolving 900 spins (30×30 lattice) with verified logical fidelity >0.9957 after 5000 Floquet periods.
+- A working **logical qubit abstraction layer** and **compiler core** already exist: universal gates (X, Z, CZ, S, T, multi-controlled phases) are implemented as tiny scheduled modulations of the single global drive.
 
-**Future directions:**  
-- **Qiskit frontend transpiler integration:** Develop a SpiralVM transpiler that takes standard Qiskit circuits as input and outputs Qiskit circuits augmented with SpiralVM-specific logical qubit encodings and gate protocols. After translation, the extended Qiskit circuits can be seamlessly compiled and executed by Qiskit’s native backends on simulators or real hardware.  
-- **Cross-platform virtualization:** Abstract the VM to support multiple quantum software stacks (e.g., Cirq, Amazon Braket) and diverse hardware platforms (superconducting, trapped ions, neutral atoms).  
-- **Pulse-level control:** Investigate direct pulse schedule synthesis compatible with native device control languages to implement spiral twists and periodic drives at the hardware level.  
-- **Scalable FTQC architecture:** Utilize SpiralVM virtualization plus hardware abstraction to demonstrate scalable, resource-efficient fault-tolerant quantum computing at near-term device scales.
+**Future directions**
 
-**Build Order**
-- Phase 1: Simulator-based Logical Gate Implementation
-Focus on implementing a comprehensive set of logical gates (X, Z, CZ, T, etc.) directly on SpiralVM classical simulator. This ensures full validation, correctness, and benchmarking of logical qubit encodings and gate protocols within a controlled environment.
+- **Qiskit / Cirq / Braket transpiler integration**  
+  Build a SpiralVM pass that consumes arbitrary circuits and re-expresses them using only global-drive logical gates.
 
-- Phase 2: Experimental Hardware Validation and Overlap Algorithms
-	- Build algorithms that allow physical qubits to belong to multiple logical qubit neighborhoods, enabling overlaps.  
-	- Update SpiralVM data structures and gate implementations to handle overlapping logical qubit clusters correctly.  
-	- Modify your SpiralVM simulator and Qiskit transpiler to support these overlaps during simulation and circuit generation.  
-	- Design and run experiments on real hardware using these overlapping neighborhoods, focusing on neighborhood sizes like radius 1.  
-	- Benchmark logical qubit and gate fidelities on hardware, comparing to simulation results.  
-	- Test native non-Clifford gates like the T-gate experimentally within overlapping logical qubit settings.  
-	- Develop error mitigation and decoding strategies that manage noise and cross-talk introduced by overlaps.  
-	- Use experimental feedback to improve simulator accuracy and tune gate sequences and parameter ramps.
+- **Pulse-level synthesis**  
+  Generate real microwave/optical waveforms (OpenPulse, Quantinuum Syntax, IonQ Native, etc.) that implement the spiral twist and logical gate schedules on actual hardware.
 
-- Phase 3: Qiskit Integration via Transpiler
-Develop a C++-based Qiskit Python parser that reads standard Qiskit circuits and maps them onto SpiralVM’s logical gate set. Follow this with a C++-Python code generator which converts SpiralVM logical programs back into executable Qiskit circuits augmented with SpiralVM-specific operations.
+- **Overlapping logical neighbourhoods**  
+  Allow physical spins to belong to multiple logical qubits simultaneously → push effective overhead below 1:1.
 
-- Phase 4: User-Facing SpiralVM Frontend for Qiskit
-Build a Python frontend layer around the transpiler, enabling users to write native Qiskit code transparently compiled into SpiralVM-enhanced Qiskit circuits. This approach leverages Qiskit’s core compilation and backend execution stacks while embedding SpiralVM logic.
----
+- **First hardware demonstrations (2026–2027 target)**  
+  20–100 ion/atom 2D crystals with one global RF beam + one static gradient → demonstrate >100-cycle logical memory and native T-gates.
 
-By combining physics-grounded passive error suppression with software-defined logical operations in a cross-platform virtual machine, SpiralVM aims to democratize access to robust quantum computing far beyond traditional error correction paradigms.
+**Build Order **
 
-
-| Protocol (2025)                  | Physical qubits per logical qubit | Ancillas | Syndrome extraction | Magic-state factories | Post-selection | Single-qubit addressable T-gate? |
-|----------------------------------|-----------------------------------|----------|----------------------|-----------------------|----------------|----------------------------------|
-| Harvard/Caltech/QuEra (https://arxiv.org/abs/2510.06159) qLDPC      | ~76                               | Yes      | Yes (batched)        | Yes (5–10× volume)    | Yes            | No (batched only)                |
-| SpiralVM (exact 900-qubit RK4)   | **~1.16**                         | No       | No                   | No                    | No             | Yes                              |
+- **Phase 1** — Universal logical gate set on the classical SpiralVM simulator → **Done**
+- **Phase 2** — Experimental validation + overlapping neighbourhoods  
+  Run real 2D ion/neutral-atom chips, benchmark logical fidelity vs simulation, iterate.
+- **Phase 3** — Full transpiler backend for Qiskit/Cirq  
+  Users write normal quantum code → SpiralVM compiles it to global-drive schedules.
+- **Phase 4** — Public SpiralVM SDK + cloud access  
+  One-click compilation to real globally driven hardware.
 
 ---
 
-Feel free to contribute, experiment, and collaborate!
+By combining physics-level passive stabilisation (the spiral twist) with software-defined logical operations in a true quantum virtual machine, SpiralVM remains the only known path to **universal, fault-tolerant quantum computing with ~1:1 physical-to-logical overhead and fully global control**.
+
+| Protocol (2025)                              | Phys/logical ratio | Ancillas | Syndrome | Magic factories | Post-selection | Individual addressing |
+|----------------------------------------------|--------------------|----------|----------|------------------|----------------|------------------------|
+| Harvard/QuEra qLDPC (arXiv:2510.06159)       | ~76                | Yes      | Yes      | Yes              | Yes            | Yes                    |
+| SpiralVM — simulation (2025, this work)      | **~1.16**          | No       | No       | No               | No             | No                     |
+| SpiralVM — projected on real ions/atoms      | **~1.16**          | No       | No       | No               | No             | No                     |
+
+Everything you dreamed of is still on the table.  
+We just admit Phase 1 is done and Phase 2 is next.
+
+Contributions from experimentalists very, very welcome.

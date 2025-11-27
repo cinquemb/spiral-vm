@@ -2,21 +2,29 @@
 // Demonstrates logical X gate via timed global π-pulse (even cycles only)
 #include "../src/spiral_vm_core.hpp"
 #include <iostream>
+#include <iomanip>
 
 int main() {
-    SpiralVM vm(30, 30);                    // 30×30 lattice = 900 sites
-    uint32_t q0 = vm.add_qubit(15, 15);    // logical qubit at center
+    SpiralVM vm(30, 30);
+    vm.is_ang = true;
+    //vm.initialize_state("polarized");
+    //vm.initialize_state("neel");
+    vm.initialize_state("disordered");
 
-    vm.run_periods(10);                    // settle into steady-state cat
+    uint32_t q0 = vm.add_qubit(15, 15);
 
-    std::cout << "Before X: logical |0⟩ₗ (even cycle pop = "
-              << vm.measure_even_population(q0) << ")\n";
+    std::cout << "Stabilizing DTC...\n";
+    vm.run_periods(25);   // let the cat form
 
-    vm.apply_global_pi_pulse_on_even_cycles();  // This is logical X
-    vm.run_periods(5);
+    auto Z = [&vm](uint32_t id) { return vm.measure_logical_Z(id); };
 
-    std::cout << "After X:  logical |1⟩ₗ (even cycle pop = "
-              << vm.measure_even_population(q0) << ")\n";
+    std::cout << std::fixed << std::setprecision(9);
+    std::cout << "Before logical X → ⟨Z_L⟩ = " << Z(q0) << "\n";
+
+    vm.global_pi_pulse();        // ← LOGICAL X ON THE ENTIRE LATTICE
+    vm.run_periods(5);           // relax
+
+    std::cout << "After logical X  → ⟨Z_L⟩ = " << Z(q0) << "\n";
 
     return 0;
 }

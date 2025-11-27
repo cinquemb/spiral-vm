@@ -42,6 +42,7 @@ SpiralVM::SpiralVM(int r, int c) :
 {
     phi = zeros<cx_mat>(N * D, 1);
     phi_in = zeros<cx_mat>(N * D, 1);
+    state = phi;
 }
 
 // Initialize quantum state: "neel", "polarized", or "disordered"
@@ -72,8 +73,14 @@ void SpiralVM::initialize_state(const string& initial_state) {
         }
     }
     double norm0 = sqrt(inner_product_cl10(phi, phi));
-    phi /= norm0;
-    phi_in = phi;
+    if (initial_state != "disordered") {
+        phi /= norm0;           // keep physical norm=1 for clean states
+        phi_in = phi;
+    } else {
+        // disordered = real experimental noise → keep raw norm ≈ √N
+        // this gives macroscopic cat amplitude ≈ 1
+        phi_in = phi / norm0;   // but still save normalized copy for fidelity tracking
+    }
     fidelities[0] = 1.0;
 
     current_period = 0;
@@ -187,6 +194,9 @@ void SpiralVM::step_period(int n, double &delta_F) {
     fidelities[n + 1] = abs(inner_product_cl10(phi_in, phi));
     delta_F = 1.0 - fidelities[n + 1];
     current_period++;
+    state = phi; //sync
+
+
 }
 
 double SpiralVM::omega_ang_end(int n) {
@@ -291,12 +301,11 @@ void SpiralVM::apply_global_pi_pulse_on_even_cycles() {
 // Helper that flips all qubits' sigma_x basis amplitudes (pi rotation around X)
 // This implements global pi pulse (logical X) on full lattice
 void SpiralVM::global_pi_pulse() {
-    for (int i = 0; i < N; i++) {
+    for (int i = 0; i < N; ++i) {
         // Swap amplitudes of |0> and |1> (indices i*D, i*D+1)
-        cx_double temp = phi(i * D, 0);
-        phi(i * D, 0) = phi(i * D + 1, 0);
-        phi(i * D + 1, 0) = temp;
+        std::swap(state(i*2 + 0, 0), state(i*2 + 1, 0));  // flip |0⟩ ↔ |1⟩
     }
+    state = phi = state;  // sync both
 }
 
 //----------------------------------------------------------------
@@ -326,6 +335,25 @@ double SpiralVM::measure_even_population(uint32_t qid) {
 
     if (count == 0) return 0.0;
     return pop_sum / count; // average population on even sublattice near logical qubit
+}
+
+double SpiralVM::measure_logical_Z(uint32_t qid) const {
+    if (qid >= logical_qubits.size()) return 0.0;
+
+    double staggered = 0.0;
+    int count = 0;
+
+    // Measure global staggered magnetization over the WHOLE lattice
+    // (or restrict to a mask later when you have multiple non-overlapping qubits)
+    for (int r = 0; r < rows; ++r) {
+        for (int c = 0; c < cols; ++c) {
+            int i = r * cols + c;
+            double sz = std::norm(state(i*2 + 0)) - std::norm(state(i*2 + 1));  // ⟨σz⟩
+            staggered += ((r + c) % 2 == 0) ? sz : -sz;
+            ++count;
+        }
+    }
+    return staggered / count;
 }
 
 // Apply a global phase shift (logical S gate or arbitrary phase rotation) to the entire quantum state
@@ -631,10 +659,10 @@ double SpiralVM::compute_avg_stabilizer(const cx_mat& phi) {
     }
     return stab_sum / count;
 }
-
+/*
 int main() {
     SpiralVM vm(30, 30);
     vm.initialize_state("neel");
     vm.run_floquet(5000, "neel");
     return 0;
-}
+}*/

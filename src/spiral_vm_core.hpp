@@ -34,6 +34,7 @@ public:
     double J, h0, h1, omega, T;  // Hamiltonian / Floquet parameters
     bool is_ang;                 // Spiral angle flag
     bool overlap_enabled = false; // Overlap mode toggle
+    arma::cx_mat state;   // ALWAYS up-to-date state (used by all measurements)
 
     // Logical qubit management
     uint32_t add_qubit(uint32_t x, uint32_t y);
@@ -52,7 +53,9 @@ public:
     void apply_phase_kick_between_full(uint32_t qid1, uint32_t qid2, double strength, double duration_fraction);
     double logical_zz_correlation(uint32_t qid1, uint32_t qid2);
     double get_logical_phase(uint32_t qid);
+    double measure_logical_Z(uint32_t qid) const;
     void ramp_omega_ang(double start, double end, double duration_seconds);
+    void global_pi_pulse();
 
     // Initialization and simulation control
     void initialize_state(const std::string& initial_state = "neel");
@@ -86,7 +89,6 @@ private:
     // Private methods: physics calculations, Floquet step
     void step_period(int n, double& delta_F);
 
-    void global_pi_pulse();
 
     // Helpers for energy, Hamiltonian, etc.
 

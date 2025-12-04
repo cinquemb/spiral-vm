@@ -1,15 +1,47 @@
-// spiral_compiler.hpp
-
 #ifndef SPIRAL_COMPILER_HPP
 #define SPIRAL_COMPILER_HPP
 
 #include <vector>
 #include <cstdint>
 #include <armadillo>
+#include <complex>
+#include <random>
+#include <functional>
+#include <string>
+#include <limits>
+
+// Minimal footprint Waveform/Tone types (kept public for test scripting)
+struct Tone {
+    double amp;      // amplitude (units of transverse field)
+    double freq;     // angular frequency (rad/s)
+    double phase;    // phase offset (rad)
+    double envelope_start; // relative to local period fraction [0..1]
+    double envelope_end;   // relative to local period fraction [0..1]
+    // simple linear/hann envelope flag could be added
+    Tone(double a=0,double f=0,double p=0,double s=0,double e=1.0)
+        : amp(a), freq(f), phase(p), envelope_start(s), envelope_end(e) {}
+};
+
+struct Waveform {
+    std::vector<Tone> tones;
+    // Evaluate waveform at time t (seconds)
+    // Optional lowpass anti-aliasing applied externally by engine
+    double eval(double t) const {
+        double s = 0.0;
+        for (const auto &tn : tones) {
+            // basic envelope: linear ramp between start and end (wrap around handled by caller)
+            // the envelope here is naive and expects caller to choose appropriate durations
+            s += tn.amp * std::cos(tn.freq * t + tn.phase);
+        }
+        return s;
+    }
+};
 
 struct LogicalQubit {
     uint32_t center_x, center_y;  // spiral center
     double base_phase;
+    // allocator info
+    int waveform_id = -1;
 };
 
 struct Gate {
@@ -18,7 +50,6 @@ struct Gate {
     uint32_t target;
     uint32_t control;  // only for CZ
     double angle;
-
     Gate(Type t, uint32_t tgt, double ang = 0.0, uint32_t ctrl = UINT32_MAX)
         : type(t), target(tgt), control(ctrl), angle(ang) {}
 };
@@ -36,11 +67,17 @@ public:
     bool overlap_enabled = false; // Overlap mode toggle
     arma::cx_mat state;   // ALWAYS up-to-date state (used by all measurements)
 
+    // Waveform engine tunables (public for easy experimentation)
+    double freq_base = 2.0;       // base addressable angular frequency (rad/s)
+    double freq_spacing = 0.002;  // spacing between logical qubit carriers (rad/s)
+    double lowpass_cutoff = 0.5;  // low-pass factor (0..1) relative to Nyquist (coarse)
+    double max_tone_amp = 5.0;    // safety clamp on tone amplitudes
+
     // Logical qubit management
     uint32_t add_qubit(uint32_t x, uint32_t y);
 
     // Gate scheduling and application
-    void apply_gate(const Gate& g, double period_time);
+    void apply_gate(const Gate& g, double period_time = 0.0);
     void compile_and_run(const std::vector<Gate>& program);
 
     // Functional control
@@ -65,6 +102,7 @@ public:
     void print_overlap_stats();
 
 private:
+    // internal state
     double omega_ang_base;
 
     arma::cx_mat phi;                  // Quantum state vector (2*N x 1)
@@ -86,20 +124,36 @@ private:
     std::vector<double> fidelities;
     std::vector<double> fidelity_window;
 
+    // Waveform engine (bank + mapping)
+    std::vector<Waveform> waveforms;       // global waveform bank
+    std::vector<int> drive_index;          // size N, drive_index[i] = waveform ID
+
+    // Frequency allocation bookkeeping
+    std::vector<double> allocated_carriers;
+
     // Private methods: physics calculations, Floquet step
     void step_period(int n, double& delta_F);
 
+    // Waveform helpers
+    int allocate_waveform_for_qubit(uint32_t qid);
+    Waveform make_default_logical_waveform(uint32_t qid);
+    Waveform make_cz_waveform(uint32_t qid1, uint32_t qid2, double strength, double duration_fraction);
+    void lowpass_filter_waveform(Waveform &w, double cutoff_factor);
+    double eval_waveform_with_envelope(const Waveform &w, double t, double local_period_fraction=0.0) const;
 
-    // Helpers for energy, Hamiltonian, etc.
-
-    // e.g.:
+    // Hamiltonian helpers
     arma::cx_mat mat_vec_mult_cl10(const arma::sp_cx_mat& H, const arma::cx_mat& phi);
     double inner_product_cl10(const arma::cx_mat& phi1, const arma::cx_mat& phi2);
     double compute_zz_energy(const arma::cx_mat& phi, double J, double omega_ang, double period, bool is_ang = false);
     arma::cx_mat compute_zz_energy_vector(const arma::cx_mat& phi, double J, double omega_ang, double period, bool is_ang = false);
     void compute_nonzero_indices_spiral_twist(double J, double ht, int rows, int cols, int D, double omega_ang, arma::umat& locations, arma::cx_vec& values, uint& nz);
     arma::sp_cx_mat hamiltonian_cl10_90_spiral_twist(double J, double ht, double omega_ang);
+    arma::sp_cx_mat hamiltonian_cl10_90_spiral_twist_inhomogeneous(double J, const std::vector<double> &local_hx, double omega_ang);
+
     double compute_avg_stabilizer(const arma::cx_mat& phi);
+
+    // Safety helpers
+    double clamp_tone_amp(double a) const;
 };
 
 #endif // SPIRAL_COMPILER_HPP

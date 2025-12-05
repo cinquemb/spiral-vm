@@ -1,7 +1,7 @@
 // spiral_vm_core.cpp
 // Implementation for SpiralVM Option 1 (waveform multiplexing + frequency allocator + shaped envelopes)
 // Requires armadillo and C++17
-#include "spiral_compiler.hpp"
+#include "spiral_vm_core.hpp"
 #include <iostream>
 #include <sstream>
 #include <cmath>

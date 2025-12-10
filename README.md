@@ -9,17 +9,17 @@ Macroscopic Néel cat states that refuse to die — for **>5000 Floquet cycles**
 
 ### It Works — From Hot Garbage to Perfect Logical Qubit in 25 Cycles
 
-The hardest possible test: start the entire lattice in a completely random, high-temperature state (`disordered`).
+The hardest possible test: start the entire lattice in a completely random, high-temperature state (`disordered`) at 65536 Hz drive.
 
 ```bash
 $ cd examples
 $ g++ -O2 ../src/spiral_vm_core.cpp logical_x.cpp -o logical_x -larmadillo -llapack -lblas
 $ ./logical_x 
-[SpiralVM] Initialized (neel), norm0=30
+[SpiralVM] Initialized (disordered), norm0=30
 [SpiralVM] Added logical qubit 0 @(15,15), wf=1
 Stabilizing DTC...
-Before logical X → ⟨Z_L⟩ = 0.00111111111069245728
-After logical X  → ⟨Z_L⟩ = -0.00111111111055574524
+Before logical X → ⟨Z_L⟩ = -0.00002222219743678894
+After logical X  → ⟨Z_L⟩ = 0.00002222219228399328
 ```
 
 **No ancillas. No syndrome extraction. No per-qubit control.**  

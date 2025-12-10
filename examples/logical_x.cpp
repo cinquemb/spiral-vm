@@ -8,8 +8,8 @@ int main() {
     SpiralVM vm(30, 30);
     vm.is_ang = true;
     //vm.initialize_state("polarized");
-    //vm.initialize_state("neel");
-    vm.initialize_state("disordered");
+    vm.initialize_state("neel");
+    //vm.initialize_state("disordered");
 
     uint32_t q0 = vm.add_qubit(15, 15);
 
@@ -18,7 +18,7 @@ int main() {
 
     auto Z = [&vm](uint32_t id) { return vm.measure_logical_Z(id); };
 
-    std::cout << std::fixed << std::setprecision(9);
+    std::cout << std::fixed << std::setprecision(20);
     std::cout << "Before logical X → ⟨Z_L⟩ = " << Z(q0) << "\n";
 
     vm.global_pi_pulse();        // ← LOGICAL X ON THE ENTIRE LATTICE

@@ -19,7 +19,7 @@ static inline double sq(double x){ return x*x; }
 SpiralVM::SpiralVM(int r, int c)
 : rows(r), cols(c), N(r*c),
   J(0.3), h0(0.0), h1(2.5/4.4),
-  omega(20*2*M_PI), T(2*M_PI/(20*2*M_PI)), // default values; T overwritten if omega set
+  omega(65536*2*M_PI), T(2*M_PI/(65536*2*M_PI)), // default values; T overwritten if omega set
   is_ang(true),
   state(2*r*c, 1, fill::zeros),
   phi(2*r*c, 1, fill::zeros),

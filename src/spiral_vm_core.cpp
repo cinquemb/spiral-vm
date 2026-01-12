@@ -142,6 +142,82 @@ int SpiralVM::allocate_waveform_for_qubit(uint32_t qid) {
     return wid;
 }
 
+// Add this implementation to spiral_vm_core.cpp (place it near allocate_waveform_for_qubit or other setup functions)
+
+// Compilation to single physical (global multi-tone) waveform
+void SpiralVM::compile_to_physical_waveform() {
+    if (waveforms.empty()) {
+        std::cerr << "[SpiralVM] No waveforms to compile\n";
+        return;
+    }
+
+    Waveform physical_global = waveforms[0];
+
+    constexpr double freq_eps  = 1e-9;
+    constexpr double phase_eps = 1e-9;
+
+    using Key = std::tuple<double,double,int>; // freq, phase, logical_id
+
+    auto cmp = [freq_eps, phase_eps](const Key& a, const Key& b) {
+        if (std::abs(std::get<0>(a) - std::get<0>(b)) > freq_eps)
+            return std::get<0>(a) < std::get<0>(b);
+        if (std::abs(std::get<1>(a) - std::get<1>(b)) > phase_eps)
+            return std::get<1>(a) < std::get<1>(b);
+        return std::get<2>(a) < std::get<2>(b); // logical_id
+    };
+
+    std::map<Key, double, decltype(cmp)> tone_map(cmp);
+
+    // Add base global tones (logical_id = -1)
+    for (const auto& tn : physical_global.tones) {
+        tone_map[{tn.freq, tn.phase, tn.logical_id}] += tn.amp;
+    }
+
+    // Add all tones from logical waveforms
+    for (size_t wid = 1; wid < waveforms.size(); ++wid) {
+        for (const auto& tn : waveforms[wid].tones) {
+            tone_map[{tn.freq, tn.phase, tn.logical_id}] += tn.amp;
+        }
+    }
+
+    // Build merged physical waveform, *preserving logical_id*
+    physical_global.tones.clear();
+    for (const auto& entry : tone_map) {
+        double freq  = std::get<0>(entry.first);
+        double phase = std::get<1>(entry.first);
+        int    qid   = std::get<2>(entry.first);
+        double amp   = clamp_tone_amp(entry.second);
+
+        physical_global.tones.emplace_back(amp, freq, phase, 0.0, 1.0, qid);
+    }
+
+    waveforms.clear();
+    waveforms.push_back(physical_global);
+    std::fill(drive_index.begin(), drive_index.end(), 0);
+
+    cout << "[SpiralVM] Compiled to single physical global waveform with "
+         << physical_global.tones.size()
+         << " merged tones (scalable broadcast, logical IDs preserved)\n";
+}
+
+
+
+
+//For Which frequency addresses which logical qubit
+void SpiralVM::dump_frequency_mapping(const std::string& fname) const{
+    if (allocated_carriers.empty()) return;
+
+    std::ofstream fout(fname);
+    fout << "{\n  \"mapping\": [\n";
+    for (size_t qid = 0; qid < allocated_carriers.size(); ++qid) {
+        if (qid > 0) fout << ",\n";
+        fout << "    {\"qid\": " << qid << ", \"carrier_freq\": " << allocated_carriers[qid] << "}";
+    }
+    fout << "\n  ]\n}\n";
+    fout.close();
+    cout << "[SpiralVM] Dumped freqnuency → logical qubit mapping to " << fname << "\n";
+}
+
 Waveform SpiralVM::make_default_logical_waveform(uint32_t qid) {
     // default: carrier + two weak sidebands + small static offset
     Waveform w;
@@ -198,11 +274,11 @@ void SpiralVM::lowpass_filter_waveform(Waveform &w, double cutoff_factor) {
 }
 
 // evaluate waveform with optional local envelope-handling (period fraction ignored for now)
-double SpiralVM::eval_waveform_with_envelope(const Waveform &w, double t, double local_period_fraction) const {
+double SpiralVM::eval_waveform_with_envelope(const Waveform &w, double t, double local_phase) const {
     // local_period_fraction isn't used in this simple engine, but kept for future gating.
     double s = 0.0;
     for (const auto &tn : w.tones) {
-        s += tn.amp * cos(tn.freq * t + tn.phase);
+        s += tn.amp * cos(tn.freq * t + tn.phase + local_phase);
     }
     return s;
 }
@@ -278,15 +354,18 @@ void SpiralVM::sample_waveform(const Waveform& w, double t_start, double dt,
 void SpiralVM::dump_waveforms(const std::string& format,
                               const std::string& prefix,
                               int period) const {
-    std::string fname_base = prefix + "period" + (period < 0 ? "_latest" : std::to_string(period));
+
+    // Only dump the physical global (id 0)
+    size_t wid = 0;
+    std::string fname_base = prefix + "global_period" + (period < 0 ? "_latest" : std::to_string(period));
 
     if (format == "csv") {
-        for (size_t wid = 0; wid < waveforms.size(); ++wid) {
+        //for (size_t wid = 0; wid < waveforms.size(); ++wid) {
             std::string fname = fname_base + "_wf" + std::to_string(wid) + ".csv";
             std::ofstream fout(fname);
             if (!fout) {
                 std::cerr << "Failed to open " << fname << "\n";
-                continue;
+                return;//continue;
             }
 
             // Metadata header
@@ -310,7 +389,7 @@ void SpiralVM::dump_waveforms(const std::string& format,
             }
             fout.close();
             //std::cout << "Dumped CSV: " << fname << "\n";
-        }
+        //}
     } else if (format == "json") {
         // Similar but JSON structure — more verbose, good for metadata-heavy use
         std::string fname = fname_base + ".json";
@@ -326,7 +405,7 @@ void SpiralVM::dump_waveforms(const std::string& format,
         fout << "  \"T\": " << T << ",\n";
         fout << "  \"waveforms\": [\n";
 
-        for (size_t wid = 0; wid < waveforms.size(); ++wid) {
+        //for (size_t wid = 0; wid < waveforms.size(); ++wid) {
             if (wid > 0) fout << ",\n";
             fout << "    {\n";
             fout << "      \"id\": " << wid << ",\n";
@@ -356,7 +435,7 @@ void SpiralVM::dump_waveforms(const std::string& format,
             }
             fout << "\n      ]\n";
             fout << "    }";
-        }
+        //}
         fout << "\n  ]\n}\n";
         fout.close();
         //std::cout << "Dumped JSON: " << fname << "\n";
@@ -488,10 +567,10 @@ void SpiralVM::step_period(int n, double &delta_F) {
         for (int i = 0; i < N; ++i) {
             int wid = drive_index[i];
             if (wid < 0 || wid >= (int)waveforms.size()) {
-                local_hx[i] = h0 + h1 * cos(omega * (t/2.0) + M_PI/4.0);
+                local_hx[i] = h0 + h1 * cos(omega * (t/2.0) + M_PI/4.0 + drive_phase);
             } else {
                 // local eval
-                double val = eval_waveform_with_envelope(waveforms[wid], t, 0.0);
+                double val = eval_waveform_with_envelope(waveforms[wid], t, drive_phase);
                 local_hx[i] = h0 + val;
             }
         }
@@ -588,7 +667,7 @@ double SpiralVM::measure_even_population(uint32_t qid) {
     return pop_sum / count;
 }
 
-double SpiralVM::measure_logical_Z(uint32_t qid) const {
+double SpiralVM::measure_logical_global_Z(uint32_t qid) const {
     if (qid >= logical_qubits.size()) return 0.0;
     // measure global staggered magnetization as before
     double staggered = 0.0;
@@ -603,6 +682,41 @@ double SpiralVM::measure_logical_Z(uint32_t qid) const {
     }
     return staggered / (double)count;
 }
+
+double SpiralVM::measure_logical_Z(uint32_t qid) const {
+    if (qid >= logical_qubits.size()) return 0.0;
+    const LogicalQubit &q = logical_qubits[qid];
+
+    double staggered = 0.0;
+    int count = 0;
+
+    for (int row = q.center_y - R; row <= q.center_y + R; ++row) {
+        if (row < 0 || row >= rows) continue;
+        for (int col = q.center_x - R; col <= q.center_x + R; ++col) {
+            if (col < 0 || col >= cols) continue;
+            int i = row * cols + col;
+            double sz = std::norm(phi(i*D + 0,0)) - std::norm(phi(i*D + 1,0));
+            staggered += ((row + col) % 2 == 0) ? sz : -sz;
+            ++count;
+        }
+    }
+
+    return (count > 0) ? staggered / (double)count : 0.0;
+}
+
+void SpiralVM::logical_phase_ramp(int target_qid, double slope, int steps) {
+    for (int k = 0; k < steps; ++k) {
+        for (auto &w : waveforms) {
+            for (auto &tn : w.tones) {
+                if (tn.logical_id == target_qid) {
+                    tn.phase += slope;
+                }
+            }
+        }
+        run_periods(1);
+    }
+}
+
 
 double SpiralVM::get_logical_phase(uint32_t qid) {
     if (qid >= logical_qubits.size()) return 0.0;
@@ -627,64 +741,78 @@ double SpiralVM::get_logical_phase(uint32_t qid) {
 }
 
 double SpiralVM::logical_zz_correlation(uint32_t qid1, uint32_t qid2) {
-    if (qid1 >= logical_qubits.size() || qid2 >= logical_qubits.size()) return 0.0;
-    const LogicalQubit &q1 = logical_qubits[qid1];
-    const LogicalQubit &q2 = logical_qubits[qid2];
-    double sum_correlation = 0.0;
-    int count = 0;
-    for (int row1 = q1.center_y - R; row1 <= q1.center_y + R; ++row1) {
-        if (row1 < 0 || row1 >= rows) continue;
-        for (int col1 = q1.center_x - R; col1 <= q1.center_x + R; ++col1) {
-            if (col1 < 0 || col1 >= cols) continue;
-            int i1 = row1*cols + col1;
-            double z1 = std::norm(phi(i1*D + 0,0)) - std::norm(phi(i1*D + 1,0));
-            for (int row2 = q2.center_y - R; row2 <= q2.center_y + R; ++row2) {
-                if (row2 < 0 || row2 >= rows) continue;
-                for (int col2 = q2.center_x - R; col2 <= q2.center_x + R; ++col2) {
-                    if (col2 < 0 || col2 >= cols) continue;
-                    int i2 = row2*cols + col2;
-                    double z2 = std::norm(phi(i2*D + 0,0)) - std::norm(phi(i2*D + 1,0));
-                    sum_correlation += z1 * z2;
-                    ++count;
-                }
-            }
-        }
-    }
-    if (count==0) return 0.0;
-    return sum_correlation / (double)count;
+    double z1 = measure_logical_Z(qid1);
+    double z2 = measure_logical_Z(qid2);
+    return z1 * z2;
 }
 
 void SpiralVM::apply_phase_shift(double angle) {
-    cx_double phase = std::exp(cx_double(0, angle));
-    for (int i = 0; i < N*D; ++i) phi(i,0) *= phase;
+    drive_phase += angle;
 }
 
-void SpiralVM::apply_phase_kick_between(uint32_t qid1, uint32_t qid2, double strength, double duration_fraction) {
-    // lightweight approximate implementation: briefly multiply local |1> amplitudes by phase on neighborhoods
+void SpiralVM::global_phase_ramp(double slope, int steps) {
+    for (int k = 0; k < steps; ++k) {
+        apply_phase_shift(slope);  // small increment each step
+        run_periods(1);            // let dynamics respond
+    }
+}
+
+
+void SpiralVM::apply_phase_kick_between(uint32_t qid1, uint32_t qid2,
+                                        double strength, double duration_fraction) {
     if (qid1 >= logical_qubits.size() || qid2 >= logical_qubits.size()) return;
+
     const LogicalQubit &q1 = logical_qubits[qid1];
     const LogicalQubit &q2 = logical_qubits[qid2];
-    cx_double phase = std::exp(cx_double(0, strength * duration_fraction));
-    for (int row1 = q1.center_y - R; row1 <= q1.center_y + R; ++row1) {
-        if (row1 < 0 || row1 >= rows) continue;
-        for (int col1 = q1.center_x - R; col1 <= q1.center_x + R; ++col1) {
-            if (col1 < 0 || col1 >= cols) continue;
-            int i1 = row1*cols + col1;
-            phi(i1*D + 1,0) *= phase;
+
+    // Estimate logical Z for each qubit (coarse, local)
+    auto logical_Z_estimate = [&](const LogicalQubit &q) {
+        double sum = 0.0;
+        int count = 0;
+        for (int row = q.center_y - R; row <= q.center_y + R; ++row) {
+            if (row < 0 || row >= rows) continue;
+            for (int col = q.center_x - R; col <= q.center_x + R; ++col) {
+                if (col < 0 || col >= cols) continue;
+                int i = row * cols + col;
+                double sz = std::norm(phi(i*D + 0,0)) - std::norm(phi(i*D + 1,0));
+                sum += ((row + col) % 2 == 0) ? sz : -sz;
+                ++count;
+            }
+        }
+        return (count > 0) ? sum / (double)count : 0.0;
+    };
+
+    double Z1 = logical_Z_estimate(q1);
+    double Z2 = logical_Z_estimate(q2);
+
+    // Conditional phase angle ~ Z1 * Z2
+    double theta = strength * duration_fraction * Z1 * Z2;
+    cx_double phase = std::exp(cx_double(0, theta));
+
+    // Apply only to |1> amplitudes in BOTH neighborhoods
+    for (int row = q1.center_y - R; row <= q1.center_y + R; ++row) {
+        if (row < 0 || row >= rows) continue;
+        for (int col = q1.center_x - R; col <= q1.center_x + R; ++col) {
+            if (col < 0 || col >= cols) continue;
+            int i = row * cols + col;
+            phi(i*D + 1,0) *= phase;
         }
     }
-    for (int row2 = q2.center_y - R; row2 <= q2.center_y + R; ++row2) {
-        if (row2 < 0 || row2 >= rows) continue;
-        for (int col2 = q2.center_x - R; col2 <= q2.center_x + R; ++col2) {
-            if (col2 < 0 || col2 >= cols) continue;
-            int i2 = row2*cols + col2;
-            phi(i2*D + 1,0) *= phase;
+
+    for (int row = q2.center_y - R; row <= q2.center_y + R; ++row) {
+        if (row < 0 || row >= rows) continue;
+        for (int col = q2.center_x - R; col <= q2.center_x + R; ++col) {
+            if (col < 0 || col >= cols) continue;
+            int i = row * cols + col;
+            phi(i*D + 1,0) *= phase;
         }
     }
-    // renormalize
-    double norm = sqrt(real(inner_product_cl10(phi, phi)));
+
+    // Renormalize
+    double norm = std::sqrt(real(inner_product_cl10(phi, phi)));
     if (norm > 0) phi /= norm;
 }
+
 
 void SpiralVM::apply_phase_kick_between_full(uint32_t qid1, uint32_t qid2, double strength, double duration_fraction) {
     // more detailed: temporarily inject a CZ waveform (uses make_cz_waveform) and run for one period

@@ -5,23 +5,41 @@
 
 int main() {
     SpiralVM vm(30, 30);
+    vm.is_ang = true;
+    //vm.initialize_state("polarized");
+    vm.initialize_state("neel");
+    //vm.initialize_state("disordered");
+
     uint32_t q0 = vm.add_qubit(12, 15);
     uint32_t q1 = vm.add_qubit(18, 15);    // two neighboring spirals
 
+    vm.compile_to_physical_waveform();  // Now only 1 waveform, broadcast to all
+    vm.dump_frequency_mapping();// dump mapping
+
     vm.run_periods(20);
 
+     // MEASURE INITIAL: Both |0⟩ₗ (Néel even sites)
+    std::cout << "Pre-CZ: Z0=" << vm.measure_logical_Z(q0) 
+              << " Z1=" << vm.measure_logical_Z(q1) << "\n";
+
+
     // Logical Hadamard on q0
-    vm.apply_global_pi_pulse_on_even_cycles();     // X
-    vm.apply_phase_shift(M_PI/2);                  // S gate → H = S·X·S†
+    vm.global_pi_pulse();     // X
+    vm.logical_phase_ramp(q0, 0.02, 20);  // Z(θ) on q0 only
+
+    //vm.apply_phase_shift(M_PI/2);                  // S gate → H = S·X·S†
+    vm.global_pi_pulse();     // X
 
     // Logical CZ via short phase-gradient kick between spirals
-    vm.apply_phase_kick_between(q0, q1, 0.18, 0.3*T);  // strength & duration
+    vm.apply_phase_kick_between(q0, q1, 0.25, 0.15*vm.T);  // strength & duration
 
     vm.run_periods(10);
 
-    double corr = vm.logical_zz_correlation(q0, q1);
-    std::cout << "Logical ZZ correlation = " << corr
-              << "  (≈1.0 = perfect Bell state)\n";
+    // MEASURE FINAL: Perfect anticorrelation = Bell state
+    std::cout << "Post-CZ: Z0=" << vm.measure_logical_Z(q0) 
+              << " Z1=" << vm.measure_logical_Z(q1) << "\n";
+    std::cout << "ZZ corr=" << vm.logical_zz_correlation(q0, q1) 
+              << " (1.0 = perfect |00⟩+|11⟩)\n";
 
     return 0;
 }

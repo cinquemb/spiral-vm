@@ -18,9 +18,14 @@ struct Tone {
     double envelope_start; // relative to local period fraction [0..1]
     double envelope_end;   // relative to local period fraction [0..1]
     // simple linear/hann envelope flag could be added
-    Tone(double a=0,double f=0,double p=0,double s=0,double e=1.0)
-        : amp(a), freq(f), phase(p), envelope_start(s), envelope_end(e) {}
+        int logical_id;   // -1 = global / background, otherwise qid
+
+    Tone(double a=0,double f=0,double p=0,double s=0,double e=1.0,int q=-1)
+        : amp(a), freq(f), phase(p),
+          envelope_start(s), envelope_end(e),
+          logical_id(q) {}
 };
+
 
 struct Waveform {
     std::vector<Tone> tones;
@@ -84,6 +89,8 @@ public:
     void run_floquet(int N_max, const std::string& initial_state);
     void run_periods(uint32_t n);
     void apply_global_pi_pulse_on_even_cycles();
+    void global_phase_ramp(double slope, int steps);
+    void logical_phase_ramp(int target_qid, double slope, int steps);
     double measure_even_population(uint32_t qid);
     void apply_phase_shift(double angle);
     void apply_phase_kick_between(uint32_t qid1, uint32_t qid2, double strength, double duration_fraction);
@@ -91,6 +98,7 @@ public:
     double logical_zz_correlation(uint32_t qid1, uint32_t qid2);
     double get_logical_phase(uint32_t qid);
     double measure_logical_Z(uint32_t qid) const;
+    double measure_logical_global_Z(uint32_t qid) const;
     void ramp_omega_ang(double start, double end, double duration_seconds);
     void global_pi_pulse();
 
@@ -101,6 +109,8 @@ public:
 
     // Helper to sample a waveform over one period
     void sample_waveform(const Waveform& w, double t_start, double dt, arma::vec& times, arma::cx_vec& iq, arma::vec& amps, arma::vec& phases) const;
+    void compile_to_physical_waveform();  // Compiles all logical waveforms into a single global physical waveform (multi-tone broadcast)
+    void dump_frequency_mapping(const std::string& fname = "frequency_to_logical.json") const;
 
     // Initialization and simulation control
     void initialize_state(const std::string& initial_state = "neel");
@@ -112,6 +122,7 @@ public:
 private:
     // internal state
     double omega_ang_base;
+    double drive_phase = 0.0;
 
     arma::cx_mat phi;                  // Quantum state vector (2*N x 1)
     arma::cx_mat phi_in;               // Initial state for fidelity measurement

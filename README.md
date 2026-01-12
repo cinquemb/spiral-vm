@@ -107,3 +107,5 @@ Everything you dreamed of is still on the table.
 We just admit Phase 1 is done and Phase 2 is next.
 
 Contributions from experimentalists very, very welcome.
+
+If you believe this is a numerical artifact, please specify which line of code you believe produces it.

@@ -236,6 +236,135 @@ uint32_t SpiralVM::add_qubit(uint32_t x, uint32_t y) {
     return qid;
 }
 
+
+
+// ---------- Sample one waveform over one full Floquet period ----------
+// Sample one waveform over one full Floquet period
+void SpiralVM::sample_waveform(const Waveform& w, double t_start, double dt,
+                               arma::vec& times,
+                               arma::cx_vec& iq,
+                               arma::vec& amps,
+                               arma::vec& phases) const {
+    int n_samples = static_cast<int>(std::ceil(T / dt));
+    times.set_size(n_samples);
+    iq.set_size(n_samples);
+    amps.set_size(n_samples);
+    phases.set_size(n_samples);
+
+    for (int k = 0; k < n_samples; ++k) {
+        double t = t_start + k * dt;
+        double real_part = 0.0;
+        double imag_part = 0.0;
+
+        // Sum contributions from all tones
+        for (const auto& tn : w.tones) {
+            double arg = tn.freq * t + tn.phase;
+            real_part += tn.amp * std::cos(arg);
+            imag_part += tn.amp * std::sin(arg);
+        }
+
+        times(k) = t;
+        iq(k) = cx_double(real_part, imag_part);
+
+        double amp = std::sqrt(real_part*real_part + imag_part*imag_part);
+        double phase = (amp > 1e-12) ? std::atan2(imag_part, real_part) : 0.0;
+
+        amps(k)   = amp;
+        phases(k) = phase;
+    }
+}
+
+// ---------- Main dump function ----------
+void SpiralVM::dump_waveforms(const std::string& format,
+                              const std::string& prefix,
+                              int period) const {
+    std::string fname_base = prefix + "period" + (period < 0 ? "_latest" : std::to_string(period));
+
+    if (format == "csv") {
+        for (size_t wid = 0; wid < waveforms.size(); ++wid) {
+            std::string fname = fname_base + "_wf" + std::to_string(wid) + ".csv";
+            std::ofstream fout(fname);
+            if (!fout) {
+                std::cerr << "Failed to open " << fname << "\n";
+                continue;
+            }
+
+            // Metadata header
+            fout << "# SpiralVM Waveform Dump\n";
+            fout << "# Waveform ID: " << wid << "\n";
+            fout << "# Period: " << (period < 0 ? current_period : period) << "\n";
+            fout << "# T (s): " << T << "\n";
+            fout << "# Sample dt (s): " << T/1000.0 << " (1000 pts per period)\n";
+            fout << "# time_s,I,Q,amp,phase_rad\n";
+
+            arma::vec times;
+            arma::cx_vec iq;
+            arma::vec amps;
+            arma::vec phases;
+
+            double dt = T / 1000.0;  // 1000 samples per period — adjust as needed
+            sample_waveform(waveforms[wid], 0.0, dt, times, iq, amps, phases);
+
+            for (size_t k = 0; k < times.size(); ++k) {
+                fout << times(k) << "," << iq(k).real() << "," << iq(k).imag() << "," << amps(k) << "," << phases(k) << "\n";
+            }
+            fout.close();
+            //std::cout << "Dumped CSV: " << fname << "\n";
+        }
+    } else if (format == "json") {
+        // Similar but JSON structure — more verbose, good for metadata-heavy use
+        std::string fname = fname_base + ".json";
+        std::ofstream fout(fname);
+        if (!fout) {
+            std::cerr << "Failed to open " << fname << "\n";
+            return;
+        }
+
+        fout << "{\n";
+        fout << "  \"spiral_vm_version\": \"0.1\",\n";
+        fout << "  \"period\": " << (period < 0 ? current_period : period) << ",\n";
+        fout << "  \"T\": " << T << ",\n";
+        fout << "  \"waveforms\": [\n";
+
+        for (size_t wid = 0; wid < waveforms.size(); ++wid) {
+            if (wid > 0) fout << ",\n";
+            fout << "    {\n";
+            fout << "      \"id\": " << wid << ",\n";
+            fout << "      \"tones\": [\n";
+            for (size_t t = 0; t < waveforms[wid].tones.size(); ++t) {
+                if (t > 0) fout << ",\n";
+                const auto& tn = waveforms[wid].tones[t];
+                fout << "        {\"amp\": " << tn.amp
+                     << ", \"freq\": " << tn.freq
+                     << ", \"phase\": " << tn.phase << "}";
+            }
+            fout << "\n      ],\n";
+
+            // Sampled IQ
+            arma::vec times;
+            arma::cx_vec iq;
+            arma::vec amps;
+            arma::vec phases;
+            double dt = T / 1000.0;
+            sample_waveform(waveforms[wid], 0.0, dt, times, iq, amps, phases);
+            fout << "      \"samples\": [\n";
+            for (size_t k = 0; k < times.size(); ++k) {
+                if (k > 0) fout << ",\n";
+                fout << "        {\"t\": " << times(k)
+                     << ", \"I\": " << iq(k).real()
+                     << ", \"Q\": " << iq(k).imag() << "}";
+            }
+            fout << "\n      ]\n";
+            fout << "    }";
+        }
+        fout << "\n  ]\n}\n";
+        fout.close();
+        //std::cout << "Dumped JSON: " << fname << "\n";
+    } else {
+        std::cerr << "Unsupported format: " << format << " (use csv or json)\n";
+    }
+}
+
 // ---------- Gate application (simple immediate implementation) ----------
 void SpiralVM::apply_gate(const Gate& g, double period_time) {
     if (g.type == Gate::X) {
@@ -404,7 +533,12 @@ void SpiralVM::step_period(int n, double &delta_F) {
     if ((int)fidelities.size() <= current_period+1) fidelities.resize(current_period+2, 0.0);
     fidelities[current_period+1] = fid;
     delta_F = 1.0 - fid;
+
+    std::string fname_base = "waveform_"+ std::to_string(current_period);
+    dump_waveforms("csv", fname_base, -1);  // dump latest period
+
     current_period++;
+
 }
 
 // ---------- run N periods ----------------
@@ -431,6 +565,8 @@ void SpiralVM::global_pi_pulse() {
         std::swap(phi(i*D + 0, 0), phi(i*D + 1, 0));
     }
     state = phi;
+    std::string fname_base = "logical_x_waveform_period_"+ std::to_string(current_period);
+        dump_waveforms("csv", fname_base, current_period);
 }
 
 double SpiralVM::measure_even_population(uint32_t qid) {

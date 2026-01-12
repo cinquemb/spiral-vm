@@ -65,14 +65,14 @@ g++ -O3 -march=native src/spiral_vm_core.cpp -o spiral_vm -larmadillo
 
 ### Roadmap & Vision
 
-**Current status (November 2025)**  
+**Current status (Jan 2026)**  
 - SpiralVM is a **high-fidelity classical mean-field simulator** (C++17 + Armadillo) capable of evolving 900 spins (30×30 lattice) with verified logical fidelity >0.9957 after 5000 Floquet periods.
 - A working **logical qubit abstraction layer** and **compiler core** already exist: universal gates (X, Z, CZ, S, T, multi-controlled phases) are implemented as tiny scheduled modulations of the single global drive.
 
 **Future directions**
 
-- **Qiskit / Cirq / Braket transpiler integration**  
-  Build a SpiralVM pass that consumes arbitrary circuits and re-expresses them using only global-drive logical gates.
+- **[Quick](https://github.com/Qualition/quick) transpiler integration**  
+  Build a SpiralVM pass that consumes arbitrary circuits from quick IR and re-expresses them using only global-drive logical gates.
 
 - **Pulse-level synthesis**  
   Generate real microwave/optical waveforms (OpenPulse, Quantinuum Syntax, IonQ Native, etc.) that implement the spiral twist and logical gate schedules on actual hardware.

@@ -94,6 +94,14 @@ public:
     void ramp_omega_ang(double start, double end, double duration_seconds);
     void global_pi_pulse();
 
+    // Printing Wavforms
+    void dump_waveforms(const std::string& format = "csv",  // "csv" or "json"
+        const std::string& prefix = "waveform_",
+                    int period = -1) const;               // -1 = current/latest
+
+    // Helper to sample a waveform over one period
+    void sample_waveform(const Waveform& w, double t_start, double dt, arma::vec& times, arma::cx_vec& iq, arma::vec& amps, arma::vec& phases) const;
+
     // Initialization and simulation control
     void initialize_state(const std::string& initial_state = "neel");
     double omega_ang_end(int n);

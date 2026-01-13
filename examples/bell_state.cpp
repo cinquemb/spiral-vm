@@ -7,8 +7,8 @@ int main() {
     SpiralVM vm(30, 30);
     vm.is_ang = true;
     //vm.initialize_state("polarized");
+    //vm.initialize_state("neel");
     vm.initialize_state("neel");
-    //vm.initialize_state("disordered");
 
     uint32_t q0 = vm.add_qubit(12, 15);
     uint32_t q1 = vm.add_qubit(18, 15);    // two neighboring spirals

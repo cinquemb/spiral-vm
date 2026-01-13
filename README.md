@@ -17,9 +17,11 @@ $ g++ -O2 ../src/spiral_vm_core.cpp logical_x.cpp -o logical_x -larmadillo -llap
 $ ./logical_x 
 [SpiralVM] Initialized (disordered), norm0=30
 [SpiralVM] Added logical qubit 0 @(15,15), wf=1
+[SpiralVM] Compiled to single physical global waveform with 5 merged tones (scalable broadcast, logical IDs preserved)
+[SpiralVM] Dumped freqnuency → logical qubit mapping to frequency_to_logical.json
 Stabilizing DTC...
-Before logical X → ⟨Z_L⟩ = -0.00002222219743678894
-After logical X  → ⟨Z_L⟩ = 0.00002222219228399328
+Before logical X → ⟨Z_L⟩ = 0.11111109868633074760
+After logical X  → ⟨Z_L⟩ = -0.11111109493602337739
 ```
 
 **No ancillas. No syndrome extraction. No per-qubit control.**  

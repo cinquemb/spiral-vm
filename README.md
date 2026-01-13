@@ -3,7 +3,7 @@
 ![C++17](https://img.shields.io/badge/C++-17-blue)
 ![Armadillo](https://img.shields.io/badge/Armadillo-12.8+-orange)
 
-**The world's first ~1.44:1 overhead, topologically protected, universal quantum virtual machine**
+**The world's first ~1.44:1 overhead, topologically protected, universal quantum virtual machine. A fully functional proof-of-principle FTQC virtual machine for 900 spins. Scales as a playground for global-drive logical qubits. The high-performance engine handles the heavy lifting.**
 
 
 ## **Latest Results (Jan 13, 2026)**

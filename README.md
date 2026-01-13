@@ -124,7 +124,21 @@ sys 0m0.136s
 [Shor] SUCCESS: 2147483641 = 795659 × 2699
 [Shor] Post-algorithm fidelity: Z0=0, Z1=0, Z2=0
 
+$ time ./shors_demo 2147483641 8 > shors_demo.txt; tail shors_demo.txt 
 
+real  3m19.929s
+user  3m19.007s
+sys 0m0.064s
+[Shor] Created 3 logical qubits, compiling global waveform...
+[SpiralVM] Compiled to single physical global waveform with 7 merged tones (logical IDs preserved)
+[Shor] Random base a=1870974299 (coprime to 2147483641)
+[Shor] Applied modular exp (depth=62)
+[Shor] Measured period estimate: 0
+[Shor] Estimate invalid; falling back to classical period find for a=1870974299
+[Shor] Period r=1073342642
+[Shor] Classical GCD: 2699, 795659
+[Shor] SUCCESS: 2147483641 = 2699 × 795659
+[Shor] Post-algorithm fidelity: Z0=0, Z1=0, Z2=-0.999938
 ```
 
 

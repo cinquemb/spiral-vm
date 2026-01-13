@@ -24,11 +24,9 @@ int main() {
 
 
     // Logical Hadamard on q0
-    vm.global_pi_pulse();     // X
-    vm.logical_phase_ramp(q0, 0.02, 20);  // Z(θ) on q0 only
-
-    //vm.apply_phase_shift(M_PI/2);                  // S gate → H = S·X·S†
-    vm.global_pi_pulse();     // X
+    vm.logical_phase_ramp(q0, M_PI/2.0 / 20, 20);  // Z(π/2) over 20 steps
+    vm.global_pi_pulse();  // X
+    vm.logical_phase_ramp(q0, -M_PI/2.0 / 20, 20);  // Z(-π/2)
 
     // Logical CZ via short phase-gradient kick between spirals
     vm.apply_phase_kick_between(q0, q1, 0.25, 0.15*vm.T);  // strength & duration

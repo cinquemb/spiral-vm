@@ -222,15 +222,14 @@ Waveform SpiralVM::make_default_logical_waveform(uint32_t qid) {
     // default: carrier + two weak sidebands + small static offset
     Waveform w;
     double carrier = freq_base + qid * freq_spacing;
-    // main carrier (amplitude scaled to h1)
-    Tone main(clamp_tone_amp(h1), carrier, 0.0, 0.0, 1.0);
-    w.tones.push_back(main);
-    // small symmetric sidebands (addressability / beat-note)
+    // main carrier
+    w.tones.push_back(Tone(clamp_tone_amp(h1), carrier, 0.0, 0.0, 1.0, qid));
+    // sidebands
     double side_delta = 0.05 * freq_spacing + 0.01 * (1.0 + (qid%3));
-    w.tones.push_back(Tone(clamp_tone_amp(0.12*h1), carrier + side_delta, M_PI/4.0));
-    w.tones.push_back(Tone(clamp_tone_amp(0.12*h1), carrier - side_delta, -M_PI/4.0));
-    // optional low-frequency envelope (slow amplitude modulation)
-    w.tones.push_back(Tone(clamp_tone_amp(0.02*h1), 0.5 * freq_base, 0.0));
+    w.tones.push_back(Tone(clamp_tone_amp(0.12*h1), carrier + side_delta, M_PI/4.0, 0.0, 1.0, qid));
+    w.tones.push_back(Tone(clamp_tone_amp(0.12*h1), carrier - side_delta, -M_PI/4.0, 0.0, 1.0, qid));
+    // low-freq envelope
+    w.tones.push_back(Tone(clamp_tone_amp(0.02*h1), 0.5 * freq_base, 0.0, 0.0, 1.0, qid));
     return w;
 }
 
@@ -240,16 +239,13 @@ Waveform SpiralVM::make_cz_waveform(uint32_t qid1, uint32_t qid2, double strengt
     Waveform w;
     double c1 = freq_base + qid1 * freq_spacing;
     double c2 = freq_base + qid2 * freq_spacing;
-    // amplitude scaling
-    double amp = clamp_tone_amp( strength * 0.7 );
-    w.tones.push_back(Tone(amp, c1, 0.0));
-    w.tones.push_back(Tone(amp, c2, 0.0));
-    // add a short high-frequency burst (emulated by a tone with envelope timing handled at eval)
+    double amp = clamp_tone_amp(strength * 0.7);
+    w.tones.push_back(Tone(amp, c1, 0.0, 0.0, 1.0, qid1));
+    w.tones.push_back(Tone(amp, c2, 0.0, 0.0, 1.0, qid2));
     double beat = fabs(c1 - c2);
     if (beat < 1e-12) beat = freq_spacing * 0.5;
-    w.tones.push_back(Tone(clamp_tone_amp(0.5*strength), beat + max(c1,c2), 0.0));
-    // optionally add a slow gaussian-like envelope via additional low-frequency tone
-    w.tones.push_back(Tone(clamp_tone_amp(0.05*strength), 0.5*freq_base, 0.0));
+    w.tones.push_back(Tone(clamp_tone_amp(0.5*strength), beat + max(c1,c2), 0.0, 0.0, 1.0, -1));  // shared
+    w.tones.push_back(Tone(clamp_tone_amp(0.05*strength), 0.5*freq_base, 0.0, 0.0, 1.0, -1));  // shared
     lowpass_filter_waveform(w, lowpass_cutoff);
     return w;
 }
@@ -669,13 +665,12 @@ double SpiralVM::measure_even_population(uint32_t qid) {
 
 double SpiralVM::measure_logical_global_Z(uint32_t qid) const {
     if (qid >= logical_qubits.size()) return 0.0;
-    // measure global staggered magnetization as before
     double staggered = 0.0;
     int count = 0;
     for (int r = 0; r < rows; ++r) {
         for (int c = 0; c < cols; ++c) {
             int i = r*cols + c;
-            double sz = std::norm(phi(i*D + 0,0)) - std::norm(phi(i*D + 1,0));
+            double sz = N * (std::norm(phi(i*D + 0,0)) - std::norm(phi(i*D + 1,0)));  // Add N factor
             staggered += ((r+c)%2==0) ? sz : -sz;
             ++count;
         }
@@ -695,7 +690,7 @@ double SpiralVM::measure_logical_Z(uint32_t qid) const {
         for (int col = q.center_x - R; col <= q.center_x + R; ++col) {
             if (col < 0 || col >= cols) continue;
             int i = row * cols + col;
-            double sz = std::norm(phi(i*D + 0,0)) - std::norm(phi(i*D + 1,0));
+            double sz = N * (std::norm(phi(i*D + 0,0)) - std::norm(phi(i*D + 1,0)));  // Add N factor
             staggered += ((row + col) % 2 == 0) ? sz : -sz;
             ++count;
         }
@@ -740,7 +735,9 @@ double SpiralVM::get_logical_phase(uint32_t qid) {
     return arg(avg_phase);
 }
 
+
 double SpiralVM::logical_zz_correlation(uint32_t qid1, uint32_t qid2) {
+    if (qid1 >= logical_qubits.size() || qid2 >= logical_qubits.size()) return 0.0;
     double z1 = measure_logical_Z(qid1);
     double z2 = measure_logical_Z(qid2);
     return z1 * z2;
@@ -774,7 +771,7 @@ void SpiralVM::apply_phase_kick_between(uint32_t qid1, uint32_t qid2,
             for (int col = q.center_x - R; col <= q.center_x + R; ++col) {
                 if (col < 0 || col >= cols) continue;
                 int i = row * cols + col;
-                double sz = std::norm(phi(i*D + 0,0)) - std::norm(phi(i*D + 1,0));
+                double sz = N * (std::norm(phi(i*D + 0,0)) - std::norm(phi(i*D + 1,0)));  // Add N factor
                 sum += ((row + col) % 2 == 0) ? sz : -sz;
                 ++count;
             }

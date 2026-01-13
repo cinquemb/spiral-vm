@@ -105,12 +105,9 @@ void SpiralVM::initialize_state(const string& initial_state) {
 
 // ---------- Add logical qubit + allocate waveform ----------------
 int SpiralVM::allocate_waveform_for_qubit(uint32_t qid) {
-    // Assign a carrier frequency avoiding previously allocated carriers.
-    // Very simple linear spacing allocator with basic collision avoidance.
     double base = freq_base;
     double spacing = freq_spacing;
 
-    // Attempt to allocate at base + qid*spacing, but if too close to existing carrier, shift.
     double target = base + static_cast<double>(qid) * spacing;
     bool ok = false;
     int attempt = 0;
@@ -120,21 +117,16 @@ int SpiralVM::allocate_waveform_for_qubit(uint32_t qid) {
         for (double c : allocated_carriers) {
             if (fabs(c - target) < 0.5 * spacing) { ok = false; break; }
         }
-        if (!ok) target += spacing * 0.5 * (1.0 + (attempt%2?1:-1)); // jitter
+        if (!ok) target += spacing * 0.5 * (1.0 + (attempt%2?1:-1));
         attempt++;
     }
-    if (attempt >= max_attempts) {
-        // fallback: place after last
-        target = base + allocated_carriers.size() * spacing * 1.2;
-    }
+    if (attempt >= max_attempts) target = base + allocated_carriers.size() * spacing * 1.2;
+
     allocated_carriers.push_back(target);
 
-    // Create waveform
     Waveform w = make_default_logical_waveform(qid);
-    // set primary tone freq to allocated carrier
     if (!w.tones.empty()) w.tones[0].freq = target;
 
-    // anti-alias filter
     lowpass_filter_waveform(w, lowpass_cutoff);
 
     int wid = waveforms.size();
@@ -142,52 +134,43 @@ int SpiralVM::allocate_waveform_for_qubit(uint32_t qid) {
     return wid;
 }
 
+
 // Add this implementation to spiral_vm_core.cpp (place it near allocate_waveform_for_qubit or other setup functions)
 
 // Compilation to single physical (global multi-tone) waveform
 void SpiralVM::compile_to_physical_waveform() {
-    if (waveforms.empty()) {
-        std::cerr << "[SpiralVM] No waveforms to compile\n";
-        return;
-    }
+    if (waveforms.empty()) { std::cerr << "[SpiralVM] No waveforms to compile\n"; return; }
 
     Waveform physical_global = waveforms[0];
 
     constexpr double freq_eps  = 1e-9;
     constexpr double phase_eps = 1e-9;
-
-    using Key = std::tuple<double,double,int>; // freq, phase, logical_id
+    using Key = std::tuple<double,double,int>;
 
     auto cmp = [freq_eps, phase_eps](const Key& a, const Key& b) {
         if (std::abs(std::get<0>(a) - std::get<0>(b)) > freq_eps)
             return std::get<0>(a) < std::get<0>(b);
         if (std::abs(std::get<1>(a) - std::get<1>(b)) > phase_eps)
             return std::get<1>(a) < std::get<1>(b);
-        return std::get<2>(a) < std::get<2>(b); // logical_id
+        return std::get<2>(a) < std::get<2>(b);
     };
 
     std::map<Key, double, decltype(cmp)> tone_map(cmp);
 
-    // Add base global tones (logical_id = -1)
     for (const auto& tn : physical_global.tones) {
         tone_map[{tn.freq, tn.phase, tn.logical_id}] += tn.amp;
     }
 
-    // Add all tones from logical waveforms
-    for (size_t wid = 1; wid < waveforms.size(); ++wid) {
-        for (const auto& tn : waveforms[wid].tones) {
+    for (size_t wid = 1; wid < waveforms.size(); ++wid)
+        for (const auto& tn : waveforms[wid].tones)
             tone_map[{tn.freq, tn.phase, tn.logical_id}] += tn.amp;
-        }
-    }
 
-    // Build merged physical waveform, *preserving logical_id*
     physical_global.tones.clear();
     for (const auto& entry : tone_map) {
         double freq  = std::get<0>(entry.first);
         double phase = std::get<1>(entry.first);
         int    qid   = std::get<2>(entry.first);
         double amp   = clamp_tone_amp(entry.second);
-
         physical_global.tones.emplace_back(amp, freq, phase, 0.0, 1.0, qid);
     }
 
@@ -197,14 +180,12 @@ void SpiralVM::compile_to_physical_waveform() {
 
     cout << "[SpiralVM] Compiled to single physical global waveform with "
          << physical_global.tones.size()
-         << " merged tones (scalable broadcast, logical IDs preserved)\n";
+         << " merged tones (logical IDs preserved)\n";
 }
 
 
-
-
 //For Which frequency addresses which logical qubit
-void SpiralVM::dump_frequency_mapping(const std::string& fname) const{
+void SpiralVM::dump_frequency_mapping(const std::string& fname) const {
     if (allocated_carriers.empty()) return;
 
     std::ofstream fout(fname);
@@ -215,23 +196,31 @@ void SpiralVM::dump_frequency_mapping(const std::string& fname) const{
     }
     fout << "\n  ]\n}\n";
     fout.close();
-    cout << "[SpiralVM] Dumped freqnuency → logical qubit mapping to " << fname << "\n";
+    cout << "[SpiralVM] Dumped frequency → logical qubit mapping to " << fname << "\n";
 }
 
+
 Waveform SpiralVM::make_default_logical_waveform(uint32_t qid) {
-    // default: carrier + two weak sidebands + small static offset
     Waveform w;
-    double carrier = freq_base + qid * freq_spacing;
-    // main carrier
-    w.tones.push_back(Tone(clamp_tone_amp(h1), carrier, 0.0, 0.0, 1.0, qid));
-    // sidebands
-    double side_delta = 0.05 * freq_spacing + 0.01 * (1.0 + (qid%3));
-    w.tones.push_back(Tone(clamp_tone_amp(0.12*h1), carrier + side_delta, M_PI/4.0, 0.0, 1.0, qid));
-    w.tones.push_back(Tone(clamp_tone_amp(0.12*h1), carrier - side_delta, -M_PI/4.0, 0.0, 1.0, qid));
-    // low-freq envelope
-    w.tones.push_back(Tone(clamp_tone_amp(0.02*h1), 0.5 * freq_base, 0.0, 0.0, 1.0, qid));
+
+    // --- 1. Single dominant tone per qubit ---
+    double carrier = freq_base + qid * freq_spacing;  
+    double amp = clamp_tone_amp(h1);        // main amplitude
+    double phase = (qid % 2 ? M_PI/3 : -M_PI/3); // staggered initial phase per qubit
+    w.tones.push_back(Tone(amp, carrier, phase, 0.0, 1.0, qid));
+
+    // --- 2. Tiny orthogonal “helper” tone for crosstalk cancellation ---
+    double helper_freq = carrier + 0.1*freq_spacing; 
+    double helper_amp = clamp_tone_amp(0.02 * h1); // tiny amplitude
+    double helper_phase = M_PI/4 + 0.1*qid;        // slight phase shift
+    w.tones.push_back(Tone(helper_amp, helper_freq, helper_phase, 0.0, 1.0, qid));
+
+    // --- 3. Low-pass / spectral cleanup ---
+    lowpass_filter_waveform(w, lowpass_cutoff);
+
     return w;
 }
+
 
 // create a CZ-style waveform that briefly introduces correlated phase near both qubits
 Waveform SpiralVM::make_cz_waveform(uint32_t qid1, uint32_t qid2, double strength, double duration_fraction) {
@@ -268,6 +257,20 @@ void SpiralVM::lowpass_filter_waveform(Waveform &w, double cutoff_factor) {
         t.amp = clamp_tone_amp(t.amp);
     }
 }
+
+/*
+void SpiralVM::lowpass_filter_waveform(Waveform &w, double cutoff_factor) {
+    double maxfreq = 0.0;
+    for (auto &t : w.tones) maxfreq = max(maxfreq, fabs(t.freq));
+    if (maxfreq < 1e-12) return;
+    double cutoff = cutoff_factor * maxfreq;
+    for (auto &t : w.tones) {
+        double f = fabs(t.freq);
+        if (f > cutoff) t.amp *= cutoff / f;
+        t.amp = clamp_tone_amp(t.amp);
+    }
+}*/
+
 
 // evaluate waveform with optional local envelope-handling (period fraction ignored for now)
 double SpiralVM::eval_waveform_with_envelope(const Waveform &w, double t, double local_phase) const {
@@ -526,47 +529,54 @@ void SpiralVM::run_floquet(int N_max, const string& initial_state) {
     fout.close();
 }
 
-// ---------- RK4 integration step (modified to evaluate per-site waveform) ----------
 void SpiralVM::step_period(int n, double &delta_F) {
     double dt = T / steps;
-    double delta_F_target = 1.0;
-
     cx_mat phi_new = phi;
 
-    // precompute local hx per site for this period/time sample
-    std::vector<double> local_hx(N, 0.0);
+    // ---- Frequency scattering parameters ----
+    double f_min = 1.0e6;    // minimal frequency (Hz)
+    double f_max = 1.0e9;    // maximal frequency (Hz)
+    std::uniform_real_distribution<double> dist(f_min, f_max);
 
+    std::vector<double> qubit_freqs(N, 0.0);
+    for (int i = 0; i < N; ++i) {
+        qubit_freqs[i] = dist(rng);   // assign a random frequency per qubit
+    }
+
+    // ---- RK4 integration per site ----
     for (int k = 0; k < steps; k++) {
         double t = n * T + k * dt;
 
-        // fill local_hx by evaluating the waveform bank for each physical site
+        // local field per qubit
+        std::vector<double> local_hx(N, 0.0);
         for (int i = 0; i < N; ++i) {
             int wid = drive_index[i];
+
+            // compute physical coordinates
+            int x = i % cols;
+            int y = i / cols;
+
             if (wid < 0 || wid >= (int)waveforms.size()) {
-                local_hx[i] = h0 + h1 * cos(omega * (t/2.0) + M_PI/4.0 + drive_phase);
+                // simple oscillation using scattered frequency
+                local_hx[i] = h0 + h1 * cos(qubit_freqs[i] * t + M_PI/4.0 + drive_phase);
             } else {
-                // local eval
+                // evaluate waveform if assigned
                 double val = eval_waveform_with_envelope(waveforms[wid], t, drive_phase);
                 local_hx[i] = h0 + val;
             }
         }
 
-        // compute angular modulation as before
+        // angular modulation
         double angular_freq_quasi = is_ang ? (sin(omega * M_PI * t / T) + sin(2*omega * M_PI * t / T)) : 0.0;
         double omega_ang = omega_ang_base + angular_freq_quasi;
 
-        // Build inhomogeneous Hamiltonian for this time step
+        // Hamiltonian
         sp_cx_mat H_sx = hamiltonian_cl10_90_spiral_twist_inhomogeneous(J, local_hx, omega_ang);
-
-        // compute Hzz contribution vector
         cx_mat Hzz_phi = compute_zz_energy_vector(phi_new, J, omega_ang, n, is_ang);
 
-        // RK4 k1..k4 using H_sx and Hzz_phi
+        // RK4 steps
         cx_mat k1 = mat_vec_mult_cl10(H_sx, phi_new) + Hzz_phi;
         cx_mat phi_temp = phi_new + (-cx_double(0,1) * dt/2.0) * k1;
-
-        // recompute local_hx at mid-step for better accuracy (optional here)
-        // We keep local_hx constant within step for performance; that's already a decent approximation.
 
         cx_mat k2 = mat_vec_mult_cl10(H_sx, phi_temp) + compute_zz_energy_vector(phi_temp, J, omega_ang, n, is_ang);
         phi_temp = phi_new + (-cx_double(0,1) * dt/2.0) * k2;
@@ -582,19 +592,19 @@ void SpiralVM::step_period(int n, double &delta_F) {
 
     phi = phi_new;
     state = phi;
-    // fidelity tracking
+
+    // fidelity
     double fid = fabs(inner_product_cl10(phi_in, phi));
-    // push into vector (ensure size)
     if ((int)fidelities.size() <= current_period+1) fidelities.resize(current_period+2, 0.0);
     fidelities[current_period+1] = fid;
     delta_F = 1.0 - fid;
 
-    std::string fname_base = "waveform_"+ std::to_string(current_period);
-    dump_waveforms("csv", fname_base, -1);  // dump latest period
+    std::string fname_base = "waveform_" + std::to_string(current_period);
+    dump_waveforms("csv", fname_base, -1);
 
     current_period++;
-
 }
+
 
 // ---------- run N periods ----------------
 void SpiralVM::run_periods(uint32_t N_periods) {

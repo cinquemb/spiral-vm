@@ -64,7 +64,7 @@ public:
     SpiralVM(int rows, int cols);  // constructor
 
     static constexpr int D = 2;
-    const int R = 1; // Physical neighborhood radius around each logical qubit's center
+    const int R = 10; // Physical neighborhood radius around each logical qubit's center
     const int rows, cols;         // Lattice dimensions
     const int N;                  // Number of sites
     double J, h0, h1, omega, T;  // Hamiltonian / Floquet parameters

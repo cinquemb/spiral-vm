@@ -76,6 +76,17 @@ g++ -O3 -march=native src/spiral_vm_core.cpp -o spiral_vm -larmadillo
 - **[Quick](https://github.com/Qualition/quick) transpiler integration**  
   Build a SpiralVM pass that consumes arbitrary circuits from quick IR and re-expresses them using only global-drive logical gates.
 
+  ```bash
+    cd src;
+    mkdir build && cd build
+    cmake -DPYBIND11_TEST=OFF -DCMAKE_BUILD_TYPE=Release ..
+    make spiralvm -j
+    # Creates: spiralvm.cpython-*.so
+    pip install quick-core
+    python3 -c "import spiralvm; print('SpiralVM loaded!')"
+
+    ```
+
 - **Pulse-level synthesis**  
   Generate real microwave/optical waveforms (OpenPulse, Quantinuum Syntax, IonQ Native, etc.) that implement the spiral twist and logical gate schedules on actual hardware.
 

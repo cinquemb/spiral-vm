@@ -442,70 +442,50 @@ void SpiralVM::dump_waveforms(const std::string& format,
 
 // ---------- Gate application (simple immediate implementation) ----------
 void SpiralVM::apply_gate(const Gate& g, double period_time) {
-    if (g.type == Gate::X) {
-        apply_global_pi_pulse_on_even_cycles();
-    } else if (g.type == Gate::Z) {
-        apply_phase_shift(g.angle);
-    } else if (g.type == Gate::CZ) {
-        uint32_t t = g.target;
-        uint32_t c = g.control;
-        if (t < logical_qubits.size() && c < logical_qubits.size()) {
-            // compile CZ waveform and insert it briefly
-            Waveform w = make_cz_waveform(t,c, g.angle > 0.0 ? g.angle : 0.12, 0.02);
-            int wid = waveforms.size();
-            waveforms.push_back(w);
-            // attach to neighborhoods (temporary injection)
-            for (int row = (int)logical_qubits[t].center_y - R; row <= (int)logical_qubits[t].center_y + R; ++row) {
-                if (row < 0 || row >= rows) continue;
-                for (int col = (int)logical_qubits[t].center_x - R; col <= (int)logical_qubits[t].center_x + R; ++col) {
-                    if (col < 0 || col >= cols) continue;
-                    int phys_idx = row*cols + col;
-                    drive_index[phys_idx] = wid;
-                }
-            }
-            for (int row = (int)logical_qubits[c].center_y - R; row <= (int)logical_qubits[c].center_y + R; ++row) {
-                if (row < 0 || row >= rows) continue;
-                for (int col = (int)logical_qubits[c].center_x - R; col <= (int)logical_qubits[c].center_x + R; ++col) {
-                    if (col < 0 || col >= cols) continue;
-                    int phys_idx = row*cols + col;
-                    drive_index[phys_idx] = wid;
-                }
-            }
-            // run a few periods with this waveform active
-            run_periods(max<uint32_t>(1, (uint32_t)round(period_time / T)));
-            // restore waveforms for neighborhoods to their original allocated wf id
-            for (int row = (int)logical_qubits[t].center_y - R; row <= (int)logical_qubits[t].center_y + R; ++row) {
-                if (row < 0 || row >= rows) continue;
-                for (int col = (int)logical_qubits[t].center_x - R; col <= (int)logical_qubits[t].center_x + R; ++col) {
-                    if (col < 0 || col >= cols) continue;
-                    int phys_idx = row*cols + col;
-                    drive_index[phys_idx] = logical_qubits[t].waveform_id;
-                }
-            }
-            for (int row = (int)logical_qubits[c].center_y - R; row <= (int)logical_qubits[c].center_y + R; ++row) {
-                if (row < 0 || row >= rows) continue;
-                for (int col = (int)logical_qubits[c].center_x - R; col <= (int)logical_qubits[c].center_x + R; ++col) {
-                    if (col < 0 || col >= cols) continue;
-                    int phys_idx = row*cols + col;
-                    drive_index[phys_idx] = logical_qubits[c].waveform_id;
-                }
-            }
-            // pop waveform (or keep if you want persistent)
-            // waveforms.pop_back();
+    switch (g.type) {  // ← ADD THIS
+        case Gate::X:
+            global_pi_pulse();
+            break;
+        case Gate::Z:
+            apply_phase_shift(g.angle);
+            break;
+        case Gate::CZ: {
+            global_pi_pulse();
+            uint32_t t = g.target;
+            uint32_t c = g.control;
+            apply_phase_kick_between(t, c, 0.25, period_time*T);  // strength & duration
+            break;
         }
-    } else if (g.type == Gate::MEASURE) {
-        cout << "[SpiralVM] Measure gate requested for " << g.target << "\n";
-    } else if (g.type == Gate::PHASE) {
-        apply_phase_shift(g.angle);
-    } else {
-        cout << "[SpiralVM] Gate type not implemented in apply_gate()\n";
+        case Gate::MEASURE:
+            cout << "[SpiralVM] Measure gate requested for " << g.target << "\n";
+            break;
+        case Gate::PHASE:
+            apply_phase_shift(g.angle);
+            break;
+        case Gate::H:
+            logical_hadamard(g.target);
+            break;
+        case Gate::CNOT: {
+            // Standard: H target, CZ, H target
+            logical_hadamard(g.target);
+            apply_phase_kick_between(g.control, g.target, M_PI, 0.2 * period_time);  // full π for CZ
+            logical_hadamard(g.target);
+            break;
+        }
+        case Gate::RX: case Gate::RY: case Gate::RZ:  // arbitrary rotation
+            // Placeholder: implement via phase ramp + pi-pulse sequences later
+            cout << "[SpiralVM] Rotation gate " << g.type << " not fully implemented\n";
+            break;
+        default:
+            cout << "[SpiralVM] Gate type not implemented in apply_gate()\n";
+            break;
     }
 }
 
 // compile and run simple program - immediate mode
 void SpiralVM::compile_and_run(const std::vector<Gate>& program) {
     for (const auto &g : program) {
-        apply_gate(g, T); // default run for ~1 period
+        apply_gate(g, 1); // default run for ~1 period
     }
 }
 
@@ -642,6 +622,20 @@ void SpiralVM::global_pi_pulse() {
     state = phi;
     std::string fname_base = "logical_x_waveform_period_"+ std::to_string(current_period);
         dump_waveforms("csv", fname_base, current_period);
+}
+
+// logical Hadamard on single qubit
+void SpiralVM::logical_hadamard(uint32_t qid) {
+    if (qid >= logical_qubits.size()) return;
+
+    // Z(π/2) only on target neighborhood
+    logical_phase_ramp(qid, M_PI/2.0, 1);  // ramp over 1 periods
+
+    // Global X
+    global_pi_pulse();
+
+    // Z(-π/2) on target
+    logical_phase_ramp(qid, -M_PI/2.0, 1);
 }
 
 double SpiralVM::measure_even_population(uint32_t qid) {

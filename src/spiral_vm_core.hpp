@@ -50,7 +50,7 @@ struct LogicalQubit {
 };
 
 struct Gate {
-    enum Type { X, Z, CZ, T, PHASE, MEASURE };
+    enum Type { X, Z, CZ, H, T, RZ, RX, RY, CNOT, PHASE, MEASURE };
     Type type;
     uint32_t target;
     uint32_t control;  // only for CZ
@@ -101,6 +101,7 @@ public:
     double measure_logical_global_Z(uint32_t qid) const;
     void ramp_omega_ang(double start, double end, double duration_seconds);
     void global_pi_pulse();
+    void logical_hadamard(uint32_t qid);
 
     // Printing Wavforms
     void dump_waveforms(const std::string& format = "csv",  // "csv" or "json"

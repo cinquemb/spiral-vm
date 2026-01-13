@@ -4,4 +4,5 @@ examples/bell_state
 examples/logical_x
 examples/ghz
 examples/qaoa5
+examples/max_pack
 examples/*.json

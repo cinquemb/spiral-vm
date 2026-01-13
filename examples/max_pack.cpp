@@ -1,0 +1,65 @@
+// examples/max_pack.cpp
+// Pack MAX logical qubits in 30×30 physical region → ~30 qubits total capacity
+#include "../src/spiral_vm_core.hpp"
+#include <iostream>
+#include <vector>
+
+int main() {
+    SpiralVM vm(30, 30);
+    vm.is_ang = true;
+    vm.initialize_state("neel");
+
+    // ULTRA-DENSE: 900 logicals in 30×30 block (900 phys sites)
+    std::vector<uint32_t> qubits;
+    int x_base = 15, y_base = 15;
+    
+    // Fill every site in 5×4 block
+    for(int dy = 0; dy < 30; dy++) {
+        for(int dx = 0; dx < 30; dx++) {
+            uint32_t q = vm.add_qubit(x_base+dx, y_base+dy);
+            qubits.push_back(q);
+        }
+    }
+
+    std::cout << "Packed " << qubits.size() << " logical qubits in 30×30 phys block\n";
+    
+    vm.compile_to_physical_waveform();
+    vm.dump_frequency_mapping();
+    
+    vm.run_periods(1);
+    
+    // Test all-to-all control: X all qubits
+    // SINGLE GLOBAL PULSE - flips ALL 900 logical qubits instantly
+    vm.global_pi_pulse();  
+    
+    vm.run_periods(1);
+    
+   double avg_z = 0, neel_order = 0;
+    int counted = 0;
+    size_t qidx = 0;
+    for(int dy = 0; dy < 30; dy++) {
+        for(int dx = 0; dx < 30; dx++) {
+            if(qidx >= qubits.size()) break;
+            uint32_t q = qubits[qidx++];
+            double z = vm.measure_logical_Z(q);
+            if(std::abs(z) < 0.1) continue;  // skip unstable/uninitialized
+
+            avg_z += z;
+
+            int expected_sign = ((x_base + dx + y_base + dy) % 2) ? -1 : 1;
+            neel_order += z * expected_sign;
+            counted++;
+        }
+    }
+    std::cout << "Avg Z (stable qubits) = " << avg_z/counted 
+              << ", Néel order = " << neel_order/counted 
+              << " over " << counted << " stable qubits\n";
+
+
+
+
+
+
+
+    return 0;
+}

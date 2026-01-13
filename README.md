@@ -1,5 +1,12 @@
 # SpiralVM
+
+![C++17](https://img.shields.io/badge/C++-17-blue)
+![Armadillo](https://img.shields.io/badge/Armadillo-12.8+-orange)
+
 **The world's first ~1.44:1 overhead, topologically protected, universal quantum virtual machine**
+
+
+## **Latest Results (Jan 13, 2026)**
 
 ```bash
 $ g++ -O2 ../src/spiral_vm_core.cpp max_pack.cpp -o max_pack -larmadillo -llapack -lblas
@@ -21,8 +28,6 @@ Avg Z (stable qubits) = -0.999992, Néel order = -0.00159999 over 625 stable qub
 
 ```
 
-![C++17](https://img.shields.io/badge/C++-17-blue)
-![Armadillo](https://img.shields.io/badge/Armadillo-12.8+-orange)
 
 One global RF drive. One imaginary spiral twist.  
 Macroscopic Néel cat states that refuse to die — for **>5000 Floquet cycles** (∼4 minutes at 20 Hz) in high-fidelity mean-field simulation.

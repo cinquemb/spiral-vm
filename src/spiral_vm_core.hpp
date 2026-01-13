@@ -64,7 +64,7 @@ public:
     SpiralVM(int rows, int cols);  // constructor
 
     static constexpr int D = 2;
-    const int R = 10; // Physical neighborhood radius around each logical qubit's center
+    const int R; // Physical neighborhood radius around each logical qubit's center
     const int rows, cols;         // Lattice dimensions
     const int N;                  // Number of sites
     double J, h0, h1, omega, T;  // Hamiltonian / Floquet parameters
@@ -165,10 +165,15 @@ private:
     arma::cx_mat mat_vec_mult_cl10(const arma::sp_cx_mat& H, const arma::cx_mat& phi);
     double inner_product_cl10(const arma::cx_mat& phi1, const arma::cx_mat& phi2);
     double compute_zz_energy(const arma::cx_mat& phi, double J, double omega_ang, double period, bool is_ang = false);
+    double compute_zz_energy_edgeaware(const arma::cx_mat& phi_inp, double J, double omega_ang, double period, bool is_ang = false);
     arma::cx_mat compute_zz_energy_vector(const arma::cx_mat& phi, double J, double omega_ang, double period, bool is_ang = false);
+    arma::cx_mat compute_zz_energy_vector_edgeaware(const arma::cx_mat& phi_inp, double J, double omega_ang, double period, bool is_ang = false);
     void compute_nonzero_indices_spiral_twist(double J, double ht, int rows, int cols, int D, double omega_ang, arma::umat& locations, arma::cx_vec& values, uint& nz);
     arma::sp_cx_mat hamiltonian_cl10_90_spiral_twist(double J, double ht, double omega_ang);
     arma::sp_cx_mat hamiltonian_cl10_90_spiral_twist_inhomogeneous(double J, const std::vector<double> &local_hx, double omega_ang);
+
+    int get_right_neighbor(int row, int col) const;
+    int get_down_neighbor(int row, int col) const;
 
     double compute_avg_stabilizer(const arma::cx_mat& phi);
 

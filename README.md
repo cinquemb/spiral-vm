@@ -3,7 +3,7 @@
 ![C++17](https://img.shields.io/badge/C++-17-blue)
 ![Armadillo](https://img.shields.io/badge/Armadillo-12.8+-orange)
 
-**The world's first ~1.44:1 overhead, topologically protected, universal quantum virtual machine. A fully functional proof-of-principle FTQC virtual machine for 900 spins. Scales as a playground for global-drive logical qubits. The high-performance engine handles the heavy lifting.**
+**The world's first 1:1 overhead, topologically protected, universal quantum virtual machine. A fully functional proof-of-principle FTQC virtual machine for 900 spins. Scales as a playground for global-drive logical qubits. The high-performance engine handles the heavy lifting.**
 
 
 ## **Latest Results (Jan 13, 2026)**
@@ -12,9 +12,9 @@
 $ g++ -O2 ../src/spiral_vm_core.cpp max_pack.cpp -o max_pack -larmadillo -llapack -lblas
 $ time ./max_pack > max_pack_test.txt; tail max_pack_test.txt 
 
-real  0m6.438s
-user  0m6.400s
-sys 0m0.016s
+real  0m6.119s
+user  0m6.084s
+sys 0m0.012s
 [SpiralVM] Added logical qubit 894 @(39,44), wf=895
 [SpiralVM] Added logical qubit 895 @(40,44), wf=896
 [SpiralVM] Added logical qubit 896 @(41,44), wf=897
@@ -24,7 +24,7 @@ sys 0m0.016s
 Packed 900 logical qubits in 30×30 phys block
 [SpiralVM] Compiled to single physical global waveform with 1801 merged tones (logical IDs preserved)
 [SpiralVM] Dumped frequency → logical qubit mapping to frequency_to_logical.json
-Avg Z (stable qubits) = -0.999992, Néel order = -0.00159999 over 625 stable qubits
+Avg Z (stable qubits) = -0.999996, Néel order = -7.15477e-18 over 900 stable qubits
 
 ```
 
@@ -64,7 +64,7 @@ This is the physics itself, engineered to be passively fault-tolerant.
 
 ### What we have proven in simulation (November 2025)
 - 30×30 lattice (900 spins) mean-field RK4 → fidelity **0.99574** at 5000 periods (independently reproduced in Julia)
-- Exact same physics scales perfectly to 900 spins with **~1.44 physical qubits per logical qubit**
+- Exact same physics scales perfectly to 900 spins with **1 physical qubits per logical qubit**
 - Universal gate set (X, Z, CZ, S, T, multi-qubit phases) already implemented as drive modulations
 - Working compiler core that turns logical circuits into global waveform schedules
 
@@ -139,8 +139,8 @@ By combining physics-level passive stabilisation (the spiral twist) with softwar
 | Protocol (2025)                              | Phys/logical ratio | Ancillas | Syndrome | Magic factories | Post-selection | Individual addressing |
 |----------------------------------------------|--------------------|----------|----------|------------------|----------------|------------------------|
 | Harvard/QuEra qLDPC (arXiv:2510.06159)       | ~76                | Yes      | Yes      | Yes              | Yes            | Yes                    |
-| SpiralVM — simulation (2025, this work)      | **~1.44**          | No       | No       | No               | No             | No                     |
-| SpiralVM — projected on real ions/atoms      | **~1.44**          | No       | No       | No               | No             | No                     |
+| SpiralVM — simulation (2025, this work)      | **1**          | No       | No       | No               | No             | No                     |
+| SpiralVM — projected on real ions/atoms      | **1**          | No       | No       | No               | No             | No                     |
 
 Everything you dreamed of is still on the table.  
 We just admit Phase 1 is done and Phase 2 is next.

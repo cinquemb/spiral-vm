@@ -38,6 +38,8 @@ SpiralVM::SpiralVM(int r, int c)
 {
     // Keep T consistent with omega if user sets later
     T = 2.0 * M_PI / omega;
+
+    R = sqrt((double)r*(double)c) * 0.5; // Physical neighborhood radius around each logical qubit's center, this is the optimal
     // seed RNG
     rng.seed(777);
     // create a default global waveform so unassigned drive_index maps to 0
@@ -257,20 +259,6 @@ void SpiralVM::lowpass_filter_waveform(Waveform &w, double cutoff_factor) {
         t.amp = clamp_tone_amp(t.amp);
     }
 }
-
-/*
-void SpiralVM::lowpass_filter_waveform(Waveform &w, double cutoff_factor) {
-    double maxfreq = 0.0;
-    for (auto &t : w.tones) maxfreq = max(maxfreq, fabs(t.freq));
-    if (maxfreq < 1e-12) return;
-    double cutoff = cutoff_factor * maxfreq;
-    for (auto &t : w.tones) {
-        double f = fabs(t.freq);
-        if (f > cutoff) t.amp *= cutoff / f;
-        t.amp = clamp_tone_amp(t.amp);
-    }
-}*/
-
 
 // evaluate waveform with optional local envelope-handling (period fraction ignored for now)
 double SpiralVM::eval_waveform_with_envelope(const Waveform &w, double t, double local_phase) const {
@@ -505,8 +493,8 @@ void SpiralVM::run_floquet(int N_max, const string& initial_state) {
     // initial energies:
     sp_cx_mat H_init = hamiltonian_cl10_90_spiral_twist(J, 0, 0);
     cx_mat Hphi_init = mat_vec_mult_cl10(H_init, phi);
-    double energy_init = real(inner_product_cl10(phi, Hphi_init)) + compute_zz_energy(phi, J, 0, 0);
-    double zz_energy_init = compute_zz_energy(phi, J, 0, 0);
+    double energy_init = real(inner_product_cl10(phi, Hphi_init)) + compute_zz_energy_edgeaware(phi, J, 0, 0);
+    double zz_energy_init = compute_zz_energy_edgeaware(phi, J, 0, 0);
     double sx_energy_init = 0.0;
     for (int i = 0; i < N; i++) {
         sx_energy_init -= h1 * 2.0 * real(phi(i * D, 0) * conj(phi(i * D + 1, 0)));
@@ -520,7 +508,7 @@ void SpiralVM::run_floquet(int N_max, const string& initial_state) {
         for (int i = 0; i < N; i++) {
             sx_energy -= 2.0 * h1 * real(phi(i * D, 0) * conj(phi(i * D + 1, 0)));
         }
-        double zz_energy = is_ang ? compute_zz_energy(phi, J, omega_ang_end(n), n + 1, true) : compute_zz_energy(phi, J, 0, 0);
+        double zz_energy = is_ang ? compute_zz_energy_edgeaware(phi, J, omega_ang_end(n), n + 1, true) : compute_zz_energy_edgeaware(phi, J, 0, 0);
         double energy = sx_energy + zz_energy;
 
         fout << n + 1 << "," << fidelities[n + 1] << "," << compute_avg_stabilizer(phi) << "," << energy << "," << sx_energy << "," << zz_energy << "," << delta_F << "," << h_effective_end(n) << "," << sx_avg(n) << "\n";
@@ -572,17 +560,17 @@ void SpiralVM::step_period(int n, double &delta_F) {
 
         // Hamiltonian
         sp_cx_mat H_sx = hamiltonian_cl10_90_spiral_twist_inhomogeneous(J, local_hx, omega_ang);
-        cx_mat Hzz_phi = compute_zz_energy_vector(phi_new, J, omega_ang, n, is_ang);
+        cx_mat Hzz_phi = compute_zz_energy_vector_edgeaware(phi_new, J, omega_ang, n, is_ang);
 
         // RK4 steps
         cx_mat k1 = mat_vec_mult_cl10(H_sx, phi_new) + Hzz_phi;
         cx_mat phi_temp = phi_new + (-cx_double(0,1) * dt/2.0) * k1;
 
-        cx_mat k2 = mat_vec_mult_cl10(H_sx, phi_temp) + compute_zz_energy_vector(phi_temp, J, omega_ang, n, is_ang);
+        cx_mat k2 = mat_vec_mult_cl10(H_sx, phi_temp) + compute_zz_energy_vector_edgeaware(phi_temp, J, omega_ang, n, is_ang);
         phi_temp = phi_new + (-cx_double(0,1) * dt/2.0) * k2;
-        cx_mat k3 = mat_vec_mult_cl10(H_sx, phi_temp) + compute_zz_energy_vector(phi_temp, J, omega_ang, n, is_ang);
+        cx_mat k3 = mat_vec_mult_cl10(H_sx, phi_temp) + compute_zz_energy_vector_edgeaware(phi_temp, J, omega_ang, n, is_ang);
         phi_temp = phi_new + (-cx_double(0,1) * dt) * k3;
-        cx_mat k4 = mat_vec_mult_cl10(H_sx, phi_temp) + compute_zz_energy_vector(phi_temp, J, omega_ang, n, is_ang);
+        cx_mat k4 = mat_vec_mult_cl10(H_sx, phi_temp) + compute_zz_energy_vector_edgeaware(phi_temp, J, omega_ang, n, is_ang);
 
         phi_new += (-cx_double(0,1) * dt/6.0) * (k1 + 2.0*k2 + 2.0*k3 + k4);
 
@@ -960,6 +948,78 @@ arma::cx_mat SpiralVM::compute_zz_energy_vector(const arma::cx_mat& phi_inp, dou
     return Hzz_phi;
 }
 
+// ---------- Edge-aware neighbor lookup ----------
+inline int SpiralVM::get_right_neighbor(int row, int col) const {
+    if (col + 1 < cols) return row * cols + (col + 1);
+    if (col - 1 >= 0) return row * cols + (col - 1);
+    return row * cols + col; // fallback to self
+}
+
+inline int SpiralVM::get_down_neighbor(int row, int col) const {
+    if (row + 1 < rows) return (row + 1) * cols + col;
+    if (row - 1 >= 0) return (row - 1) * cols + col;
+    return row * cols + col; // fallback to self
+}
+
+// ---------- Edge-aware ZZ energy ----------
+double SpiralVM::compute_zz_energy_edgeaware(const arma::cx_mat& phi_inp, double J, double omega_ang, double period, bool is_angf) {
+    double energy = 0.0;
+    double norm_factor = sqrt((double)rows * cols);
+
+    for (int row = 0; row < rows; ++row) {
+        for (int col = 0; col < cols; ++col) {
+            int i = row * cols + col;
+            int j_right = get_right_neighbor(row, col);
+            int j_down  = get_down_neighbor(row, col);
+
+            cx_double zi  = (phi_inp(i*D,0) - phi_inp(i*D + 1,0)) * norm_factor;
+            cx_double zjr = (phi_inp(j_right*D,0) - phi_inp(j_right*D + 1,0)) * norm_factor;
+            cx_double zjd = (phi_inp(j_down*D,0)  - phi_inp(j_down*D + 1,0)) * norm_factor;
+
+            cx_double J_twist = is_angf ? J * cx_double(0,1) : cx_double(J,0);
+
+            if (is_angf) {
+                energy += imag(J_twist * zi * zjr);
+                energy += imag(J_twist * zi * zjd);
+            } else {
+                energy += real(J_twist * zi * zjr);
+                energy += real(J_twist * zi * zjd);
+            }
+        }
+    }
+    return energy;
+}
+
+// ---------- Edge-aware ZZ energy vector ----------
+arma::cx_mat SpiralVM::compute_zz_energy_vector_edgeaware(const arma::cx_mat& phi_inp, double J, double omega_ang, double period, bool is_angf) {
+    arma::cx_mat Hzz_phi = arma::zeros<arma::cx_mat>(N*D, 1);
+    double norm_factor = sqrt((double)rows * cols);
+
+    for (int row = 0; row < rows; ++row) {
+        for (int col = 0; col < cols; ++col) {
+            int i = row * cols + col;
+            int j_right = get_right_neighbor(row, col);
+            int j_down  = get_down_neighbor(row, col);
+
+            cx_double zi  = (phi_inp(i*D,0) - phi_inp(i*D + 1,0)) * norm_factor;
+            cx_double zjr = (phi_inp(j_right*D,0) - phi_inp(j_right*D + 1,0)) * norm_factor;
+            cx_double zjd = (phi_inp(j_down*D,0)  - phi_inp(j_down*D + 1,0)) * norm_factor;
+
+            cx_double J_twist = is_angf ? J * cx_double(0,1) : cx_double(J,0);
+
+            if (is_angf) {
+                Hzz_phi(i*D + 0,0) += imag(J_twist * (zjr + zjd));
+                Hzz_phi(i*D + 1,0) -= imag(J_twist * (zjr + zjd));
+            } else {
+                Hzz_phi(i*D + 0,0) += real(J_twist * (zjr + zjd));
+                Hzz_phi(i*D + 1,0) -= real(J_twist * (zjr + zjd));
+            }
+        }
+    }
+    return Hzz_phi;
+}
+
+
 // ---------- basic linear algebra helpers ----------
 arma::cx_mat SpiralVM::mat_vec_mult_cl10(const arma::sp_cx_mat& H, const arma::cx_mat& phi_inp) {
     return H * phi_inp;
@@ -1024,12 +1084,3 @@ void SpiralVM::print_overlap_stats() {
         }
     }
 }
-
-
-/*
-int main() {
-    SpiralVM vm(30, 30);
-    vm.initialize_state("neel");
-    vm.run_floquet(5000, "neel");
-    return 0;
-}*/

@@ -11,7 +11,7 @@ int main() {
     vm.initialize_state("neel");
 
     uint32_t q0 = vm.add_qubit(12, 15);
-    uint32_t q1 = vm.add_qubit(18, 15);    // two neighboring spirals
+    uint32_t q1 = vm.add_qubit(13, 15);    // two neighboring spirals
 
     vm.compile_to_physical_waveform();  // Now only 1 waveform, broadcast to all
     vm.dump_frequency_mapping();// dump mapping

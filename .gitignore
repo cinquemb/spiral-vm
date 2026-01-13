@@ -5,4 +5,5 @@ examples/logical_x
 examples/ghz
 examples/qaoa5
 examples/max_pack
+example/shors_demo
 examples/*.json

@@ -34,12 +34,12 @@ SpiralVM::SpiralVM(int r, int c)
   fidelity_window(32, 0.0),
   waveforms(),
   drive_index(N, -1),
+  R((int)(sqrt((double)r*(double)c) * 0.5)), // Physical neighborhood radius around each logical qubit's center, this is the optimal
   allocated_carriers()
 {
     // Keep T consistent with omega if user sets later
     T = 2.0 * M_PI / omega;
 
-    R = sqrt((double)r*(double)c) * 0.5; // Physical neighborhood radius around each logical qubit's center, this is the optimal
     // seed RNG
     rng.seed(777);
     // create a default global waveform so unassigned drive_index maps to 0

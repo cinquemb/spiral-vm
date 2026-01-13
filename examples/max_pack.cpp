@@ -5,23 +5,24 @@
 #include <vector>
 
 int main() {
-    SpiralVM vm(30, 30);
+    const int max_n = 50;
+    SpiralVM vm(max_n, max_n);
     vm.is_ang = true;
     vm.initialize_state("neel");
 
     // ULTRA-DENSE: 900 logicals in 30×30 block (900 phys sites)
     std::vector<uint32_t> qubits;
-    int x_base = 15, y_base = 15;
+    int x_base = max_n/2, y_base = max_n/2;
     
     // Fill every site in 5×4 block
-    for(int dy = 0; dy < 30; dy++) {
-        for(int dx = 0; dx < 30; dx++) {
+    for(int dy = 0; dy < max_n; dy++) {
+        for(int dx = 0; dx < max_n; dx++) {
             uint32_t q = vm.add_qubit(x_base+dx, y_base+dy);
             qubits.push_back(q);
         }
     }
 
-    std::cout << "Packed " << qubits.size() << " logical qubits in 30×30 phys block\n";
+    std::cout << "Packed " << qubits.size() << " logical qubits in " << max_n <<" x " << max_n << "phys block\n";
     
     vm.compile_to_physical_waveform();
     vm.dump_frequency_mapping();
@@ -37,8 +38,8 @@ int main() {
    double avg_z = 0, neel_order = 0;
     int counted = 0;
     size_t qidx = 0;
-    for(int dy = 0; dy < 30; dy++) {
-        for(int dx = 0; dx < 30; dx++) {
+    for(int dy = 0; dy < max_n; dy++) {
+        for(int dx = 0; dx < max_n; dx++) {
             if(qidx >= qubits.size()) break;
             uint32_t q = qubits[qidx++];
             double z = vm.measure_logical_Z(q);

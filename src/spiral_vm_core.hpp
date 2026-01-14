@@ -10,6 +10,9 @@
 #include <string>
 #include <limits>
 
+static constexpr double LOGICAL_X_AMPLITUDE = 1450000.0;
+
+
 // Minimal footprint Waveform/Tone types (kept public for test scripting)
 struct Tone {
     double amp;      // amplitude (units of transverse field)
@@ -76,7 +79,7 @@ public:
     double freq_base = 2.0;       // base addressable angular frequency (rad/s)
     double freq_spacing = 0.002;  // spacing between logical qubit carriers (rad/s)
     double lowpass_cutoff = 0.5;  // low-pass factor (0..1) relative to Nyquist (coarse)
-    double max_tone_amp = 5.0;    // safety clamp on tone amplitudes
+    double max_tone_amp = 100000000000000000.0;    // safety clamp on tone amplitudes
 
     // Logical qubit management
     uint32_t add_qubit(uint32_t x, uint32_t y);
@@ -99,6 +102,8 @@ public:
     double get_logical_phase(uint32_t qid);
     double measure_logical_Z(uint32_t qid) const;
     double measure_logical_global_Z(uint32_t qid) const;
+    double measure_logical_X(uint32_t qid) const;
+    double measure_logical_Y(uint32_t qid) const;
     void ramp_omega_ang(double start, double end, double duration_seconds);
     void global_pi_pulse();
     void logical_hadamard(uint32_t qid);
@@ -136,6 +141,9 @@ private:
     double omega_ang_base;
     double drive_phase = 0.0;
 
+    bool auto_compile_enabled = true;  // member variable
+
+
     arma::cx_mat phi;                  // Quantum state vector (2*N x 1)
     arma::cx_mat phi_in;               // Initial state for fidelity measurement
     int steps;                   // RK4 steps per period
@@ -157,6 +165,7 @@ private:
 
     // Waveform engine (bank + mapping)
     std::vector<Waveform> waveforms;       // global waveform bank
+    Waveform physical_waveform;               // index 0 only: merged physical;
     std::vector<int> drive_index;          // size N, drive_index[i] = waveform ID
 
     // Frequency allocation bookkeeping

@@ -1,36 +1,34 @@
-// examples/t_gate_manual.cpp
+// examples/logical_t.cpp
+// Tests logical T gate (phase π/4 on |1⟩ branch) using superposition
 #include "../src/spiral_vm_core.hpp"
 #include <iostream>
-#include <cmath> // for M_PI
+#include <iomanip>
 
 int main() {
     SpiralVM vm(30, 30);
-    vm.is_ang = true;
-    vm.initialize_state("neel");
+    vm.initialize_state("polarized");
 
     uint32_t q0 = vm.add_qubit(15, 15);
 
-    vm.compile_to_physical_waveform();
-    vm.dump_frequency_mapping();
-        
-    // Let the system settle
+    std::cout << "Stabilizing...\n";
     vm.run_periods(1);
 
-    // Read initial logical phase
-    double phase_before = vm.get_logical_phase_frame_corrected(q0);
-    std::cout << "Before T: phase = " << phase_before << "\n";
-
-        double target_delta = M_PI/4.0;
-
-    vm.apply_gate(Gate(Gate::T, q0), 1.0);  // control=4th param
-
-    // Run a few periods to let ramp finish
+    // Create |+⟩ = H|0⟩
+    vm.logical_hadamard(q0);
     vm.run_periods(1);
 
-    // Read final logical phase
-    double phase_after = vm.get_logical_phase_frame_corrected(q0);
-    std::cout << "After T (manual ramp): phase = " << phase_after
-              << " (expect ~ " << phase_before + target_delta << ")\n";
+    auto Z = [&vm](uint32_t id) { return vm.measure_logical_Z(id); };
+    auto Y = [&vm](uint32_t id) { return vm.measure_logical_Y(id); };
 
+    std::cout << std::fixed << std::setprecision(6);
+    std::cout << "Before T       → ⟨Z_L⟩ = " << Z(q0) << ", ⟨Y_L⟩ = " << Y(q0) << "\n";
+
+    vm.logical_phase_ramp(q0, M_PI / 4.0, 1);  // T gate
+    vm.run_periods(1);
+
+    std::cout << "After T        → ⟨Z_L⟩ = " << Z(q0) << ", ⟨Y_L⟩ = " << Y(q0) << "\n";
+
+    // Expect: on |+⟩, T should rotate phase → ⟨Y_L⟩ should become positive (~0.707 ideal)
+    //For T gate: Check ⟨Y⟩ after H+T+H (should give S gate behavior).
     return 0;
 }

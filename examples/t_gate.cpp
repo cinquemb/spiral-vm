@@ -1,23 +1,36 @@
-// examples/t_gate.cpp
-// Implements non-Clifford T-gate via asymmetric twist ramp
+// examples/t_gate_manual.cpp
 #include "../src/spiral_vm_core.hpp"
 #include <iostream>
+#include <cmath> // for M_PI
 
 int main() {
     SpiralVM vm(30, 30);
+    vm.is_ang = true;
+    vm.initialize_state("neel");
+
     uint32_t q0 = vm.add_qubit(15, 15);
 
-    vm.run_periods(15);
+    vm.compile_to_physical_waveform();
+    vm.dump_frequency_mapping();
+        
+    // Let the system settle
+    vm.run_periods(1);
 
-    std::cout << "Before T: phase = " << vm.get_logical_phase(q0) << "\n";
+    // Read initial logical phase
+    double phase_before = vm.get_logical_phase_frame_corrected(q0);
+    std::cout << "Before T: phase = " << phase_before << "\n";
 
-    // T-gate = π/4 phase → ramp omega_ang asymmetrically over 8 periods
-    vm.ramp_omega_ang(126.0, 138.0, 8*T);   // +12 rad/s over 8 cycles
+        double target_delta = M_PI/4.0;
 
-    vm.run_periods(10);
+    vm.apply_gate(Gate(Gate::T, q0), 1.0);  // control=4th param
 
-    std::cout << "After T:  phase = " << vm.get_logical_phase(q0)
-              << "  (expected +π/4)\n";
+    // Run a few periods to let ramp finish
+    vm.run_periods(1);
+
+    // Read final logical phase
+    double phase_after = vm.get_logical_phase_frame_corrected(q0);
+    std::cout << "After T (manual ramp): phase = " << phase_after
+              << " (expect ~ " << phase_before + target_delta << ")\n";
 
     return 0;
 }

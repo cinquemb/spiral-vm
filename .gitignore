@@ -7,4 +7,5 @@ examples/qaoa5
 examples/max_pack
 examples/shors_demo
 examples/shors_demo_q
+examples/t_gate
 examples/*.json

@@ -225,19 +225,32 @@ Waveform SpiralVM::make_default_logical_waveform(uint32_t qid) {
 
 
 // create a CZ-style waveform that briefly introduces correlated phase near both qubits
-Waveform SpiralVM::make_cz_waveform(uint32_t qid1, uint32_t qid2, double strength, double duration_fraction) {
-    // create combined waveform: carriers for each qubit plus a short burst tone at beat frequency
+Waveform SpiralVM::make_cz_waveform(uint32_t qid1, uint32_t qid2,
+                                    double zz_strength,      // desired max ZZ coupling (rad/period)
+                                    double gate_duration_frac) {
     Waveform w;
-    double c1 = freq_base + qid1 * freq_spacing;
-    double c2 = freq_base + qid2 * freq_spacing;
-    double amp = clamp_tone_amp(strength * 0.7);
-    w.tones.push_back(Tone(amp, c1, 0.0, 0.0, 1.0, qid1));
-    w.tones.push_back(Tone(amp, c2, 0.0, 0.0, 1.0, qid2));
-    double beat = fabs(c1 - c2);
-    if (beat < 1e-12) beat = freq_spacing * 0.5;
-    w.tones.push_back(Tone(clamp_tone_amp(0.5*strength), beat + max(c1,c2), 0.0, 0.0, 1.0, -1));  // shared
-    w.tones.push_back(Tone(clamp_tone_amp(0.05*strength), 0.5*freq_base, 0.0, 0.0, 1.0, -1));  // shared
+
+    double ω1 = freq_base + qid1 * freq_spacing;
+    double ω2 = freq_base + qid2 * freq_spacing;
+    double δ = std::abs(ω1 - ω2);           // detuning / beat freq
+
+    // Main carriers — keep them on (or slightly boosted) to maintain dressing / AC Stark
+    double carrier_amp = clamp_tone_amp(0.8 * h1);   // nominal drive level
+    w.tones.emplace_back(carrier_amp, ω1, 0.0, 0.0, 1.0, qid1);
+    w.tones.emplace_back(carrier_amp, ω2, 0.0, 0.0, 1.0, qid2);
+
+    // Interaction tone — most physical choice is usually at |ω1 - ω2| (two-photon process)
+    // Amplitude tuned so that integrated ZZ coupling ≈ zz_strength over gate time
+    double interaction_amp = clamp_tone_amp(zz_strength / (gate_duration_frac * M_PI)); // rough scaling
+    double interaction_freq = δ;  // or (ω1 + ω2)/2 for Raman-like, but δ is more common for ZZ
+
+    w.tones.emplace_back(interaction_amp, interaction_freq, 0.0, 0.0, gate_duration_frac, -1);
+
+    // Optional: small AC Stark correction tone at average frequency if needed
+    // w.tones.emplace_back(0.05 * carrier_amp, (ω1 + ω2)/2, M_PI, 0.0, 1.0, -1);
+
     lowpass_filter_waveform(w, lowpass_cutoff);
+
     return w;
 }
 
@@ -431,54 +444,159 @@ void SpiralVM::dump_waveforms(const std::string& format,
     }
 }
 
-// ---------- Gate application (simple immediate implementation) ----------
 void SpiralVM::apply_gate(const Gate& g, double period_time) {
-    switch (g.type) {  // ← ADD THIS
-        case Gate::X:
-            global_pi_pulse();
+    // period_time is typically in units of periods (e.g. 1.0 = one full Floquet period)
+    // We use it to scale duration / strength of control pulses
+
+    switch (g.type) {
+
+        case Gate::X: {
+            // Goal: logical X on target qubit → should become a π-pulse on that logical qubit only
+            // Current: global_pi_pulse() flips EVERY physical site → we want to avoid this
+            logical_x_pulse(g.target, period_time);
             break;
-        case Gate::Z:
-            apply_phase_shift(g.angle);
+        }
+
+        case Gate::Z: {
+            // Logical Z rotation by angle g.angle on the target qubit
+            // We already have the machinery → just phase-ramp the logical qubit's carrier tone
+            logical_phase_ramp(g.target, g.angle, 1);  // 1 step = one period is usually enough for global phase
+            // Note: if angle is large, you may want to split into multiple smaller ramps
             break;
+        }
+
+        case Gate::PHASE: {
+            // Same as Z — single-qubit phase gate
+            logical_phase_ramp(g.target, g.angle, 1);
+            break;
+        }
+
+        case Gate::H: {
+            // Logical Hadamard on target
+            // Standard decomposition: Z^(π/2) → X → Z^(-π/2)
+            // We already have logical_hadamard doing exactly this — but it currently calls global_pi_pulse()
+            // → we replace the global X with logical_x_pulse
+            logical_hadamard(g.target);   // ← this function will be updated below
+            break;
+        }
+
+        case Gate::T: {
+            // T gate = Z^(π/4) on |1⟩ (phase gate by π/4)
+            logical_phase_ramp(g.target, M_PI / 4.0, 1);  // single period, or increase steps if needed
+            break;
+        }
+
         case Gate::CZ: {
-            global_pi_pulse();
-            uint32_t t = g.target;
-            uint32_t c = g.control;
-            apply_phase_kick_between(t, c, 0.25, period_time*T);  // strength & duration
+            // Control-Z between control and target
+            // Current: global pi pulse + conditional phase kick → both problematic
+            // Desired: controlled phase between the two logical qubits without global flip
+            //
+            logical_cz(g.control, g.target);
             break;
         }
-        case Gate::MEASURE:
-            cout << "[SpiralVM] Measure gate requested for " << g.target << "\n";
-            break;
-        case Gate::PHASE:
-            apply_phase_shift(g.angle);
-            break;
-        case Gate::H:
-            logical_hadamard(g.target);
-            break;
+
         case Gate::CNOT: {
-            // Standard: H target, CZ, H target
+            // Standard decomposition: H target → CZ → H target
+            // We keep the structure but rely on updated logical_hadamard and logical_controlled_phase
             logical_hadamard(g.target);
-            apply_phase_kick_between(g.control, g.target, M_PI, 0.2 * period_time);  // full π for CZ
+            logical_controlled_phase(g.control, g.target, M_PI, period_time * 0.8); // slightly shorter to avoid over-rotation
             logical_hadamard(g.target);
             break;
         }
-        case Gate::RX: case Gate::RY: case Gate::RZ:  // arbitrary rotation
-            // Placeholder: implement via phase ramp + pi-pulse sequences later
-            cout << "[SpiralVM] Rotation gate " << g.type << " not fully implemented\n";
+
+        case Gate::RX:
+        case Gate::RY:
+        case Gate::RZ: {
+            // Arbitrary single-qubit rotations — to be implemented properly later
+            // Placeholder strategy:
+            //   RX(θ) → X^(θ/π) pulse (variable strength or duration π-pulse)
+            //   RZ(θ) → phase ramp by θ
+            //   RY(θ) → composite of RX + RZ or different axis modulation
+            //
+            // For now: minimal implementation (only RZ is trivial)
+            if (g.type == Gate::RZ) {
+                logical_phase_ramp(g.target, g.angle, 1);
+            } else {
+                // TODO: implement logical RX / RY via amplitude/phase modulated pulses on the logical carrier
+                //       Example path: temporarily increase tone amplitude for duration corresponding to rotation angle
+                std::cout << "[SpiralVM] " << g.type << "(θ=" << g.angle << ") on q" << g.target
+                          << " not yet implemented at logical level\n";
+            }
             break;
+        }
+
+        case Gate::MEASURE: {
+            // Measurement in Z basis — in waveform simulation this is tricky
+            // Options:
+            //   1. Classical readout simulation: estimate <Z> from waveform phase accumulation or neighborhood populations
+            //   2. Full projective measurement (collapse) — hard in waveform picture without feedback
+            //
+            // Pragmatic choice for now: just log / return the logical Z value (non-destructive)
+            double z = measure_logical_Z(g.target);
+            std::cout << "[SpiralVM] Measured logical Z on q" << g.target << " = " << z << "\n";
+            // TODO (future): implement actual destructive measurement + state preparation if in circuit mode
+            break;
+        }
+
         default:
-            cout << "[SpiralVM] Gate type not implemented in apply_gate()\n";
+            std::cout << "[SpiralVM] Gate type not recognized or not implemented: " << g.type << "\n";
             break;
     }
+
+    // Optional: force a small evolution step after every gate so waveform changes take effect
+    // run_periods(1);   // ← you may want this depending on your timing model
 }
 
-// compile and run simple program - immediate mode
-void SpiralVM::compile_and_run(const std::vector<Gate>& program) {
-    for (const auto &g : program) {
-        apply_gate(g, 1); // default run for ~1 period
+// Controlled phase gate — the most important two-qubit gate
+// Implements a hardware-like entangling gate by temporarily applying
+// an interaction waveform (carriers + beat/interaction tone) to both qubit neighborhoods.
+// No mid-circuit measurement or feedforward — entanglement arises from the drive-mediated interaction.
+void SpiralVM::logical_controlled_phase(uint32_t control, uint32_t target,
+                                        double max_angle, double duration_periods) {
+    if (control >= logical_qubits.size() || target >= logical_qubits.size()) {
+        std::cout << "[SpiralVM] Invalid qubit IDs for controlled phase: control=" 
+                  << control << ", target=" << target << "\n";
+        return;
     }
+
+    // Convert max_angle (desired conditional phase when both in |11>) into waveform strength
+    // Rough heuristic: strength ≈ max_angle / (duration * some calibration factor)
+    // Tune the 2.0 factor based on your sim (run test gates and measure acquired phase)
+    double zz_strength = max_angle / (duration_periods * 2.0);  // rad per period scaling
+
+    // Use the full waveform-based CZ implementation
+    apply_phase_kick_between_full(control, target, zz_strength, duration_periods);
+
+    std::cout << "[SpiralVM] Applied controlled phase (CZ-like) between control=" 
+              << control << " and target=" << target 
+              << " with max_angle=" << max_angle 
+              << " over " << duration_periods << " periods\n";
 }
+
+void SpiralVM::logical_cz(uint32_t control, uint32_t target) {
+    logical_controlled_phase(control, target, M_PI, 0.8);  // ~π conditional phase, slightly shorter duration
+}
+
+double SpiralVM::get_logical_phase_frame_corrected(uint32_t qid) {
+    double raw = get_logical_phase(qid);
+    // subtract the global drive phase
+    return raw - drive_phase;
+}
+
+int SpiralVM::find_waveform_index_for_qubit(uint32_t qid) {
+    if (qid >= logical_qubits.size()) return -1;
+
+    // search all waveforms
+    for (size_t w = 0; w < waveforms.size(); ++w) {
+        for (const auto &tn : waveforms[w].tones) {
+            if (tn.logical_id == qid) return static_cast<int>(w);
+        }
+    }
+
+    // not found
+    return -1;
+}
+
 
 // ---------- Floquet runner / logging ----------
 void SpiralVM::run_floquet(int N_max, const string& initial_state) {
@@ -589,8 +707,12 @@ void SpiralVM::step_period(int n, double &delta_F) {
     //std::cout << std::flush;
     delta_F = 1.0 - fid;
 
-    std::string fname_base = "waveform_" + std::to_string(current_period);
-    dump_waveforms("csv", fname_base, -1);
+
+    compile_to_physical_waveform();                   // always merge
+    std::string fname_base = "global_" + std::to_string(current_period);
+    dump_waveforms("csv", fname_base, -1); // always dump the physical one
+    std::string fname_base_h = "h_eff_" + std::to_string(current_period);
+    dump_h_eff(fname_base_h, -1);
 
     current_period++;
 }
@@ -605,71 +727,65 @@ void SpiralVM::run_periods(uint32_t N_periods) {
 }
 
 // ---------- logical measurements and gates ----------
-void SpiralVM::apply_global_pi_pulse_on_even_cycles() {
-    if (current_period % 2 == 0) {
-        cout << "[SpiralVM] Applying logical X (global pi pulse) at period " << current_period << "\n";
-        global_pi_pulse();
-    } else {
-        cout << "[SpiralVM] Skipping logical X on odd period " << current_period << "\n";
-    }
-}
-
-void SpiralVM::global_pi_pulse() {
-    // swap |0> and |1> amplitudes for every site
-    for (int i = 0; i < N; ++i) {
-        std::swap(phi(i*D + 0, 0), phi(i*D + 1, 0));
-    }
-    state = phi;
-    std::string fname_base = "logical_x_waveform_period_"+ std::to_string(current_period);
-        dump_waveforms("csv", fname_base, current_period);
-}
 
 // logical Hadamard on single qubit
 void SpiralVM::logical_hadamard(uint32_t qid) {
     if (qid >= logical_qubits.size()) return;
 
-    // Z(π/2) only on target neighborhood
-    logical_phase_ramp(qid, M_PI/2.0, 1);  // ramp over 1 periods
-
-    // Global X
-    global_pi_pulse();
-
-    // Z(-π/2) on target
+    // Z(π/2)
+    logical_phase_ramp(qid, M_PI/2.0, 1);
+    logical_x_pulse(qid, 1.0);
+    // Z(-π/2)
     logical_phase_ramp(qid, -M_PI/2.0, 1);
 }
 
-double SpiralVM::measure_even_population(uint32_t qid) {
-    if (qid >= logical_qubits.size()) return 0.0;
-    const LogicalQubit &q = logical_qubits[qid];
-    double pop_sum = 0.0;
-    int count = 0;
-    for (int row = 0; row < rows; ++row) {
-        for (int col = 0; col < cols; ++col) {
-            int dist = abs(row - (int)q.center_y) + abs(col - (int)q.center_x);
-            if (dist <= R && ((row + col) % 2 == 0)) {
-                int i = row*cols + col;
-                pop_sum += std::norm(phi(i*D,0));
-                ++count;
-            }
-        }
+// Applies a logical X (pi rotation) to the specified qubit by temporarily boosting the amplitude
+// of its main carrier tone to induce a strong transverse field pulse over a calibrated duration.
+// This evolves the state naturally via run_periods without touching phi directly.
+void SpiralVM::logical_x_pulse(uint32_t qid, double duration_periods) {
+    if (qid >= logical_qubits.size()) {
+        std::cout << "[SpiralVM] Invalid qubit id for logical X: " << qid << "\n";
+        return;
     }
-    if (count==0) return 0.0;
-    return pop_sum / count;
-}
 
-double SpiralVM::measure_logical_global_Z(uint32_t qid) const {
-    if (qid >= logical_qubits.size()) return 0.0;
-    double staggered = 0.0;
-    int count = 0;
-    for (int r = 0; r < rows; ++r) {
-        for (int c = 0; c < cols; ++c) {
-            int i = r*cols + c;
-            double sz = N * (std::norm(phi(i*D + 0,0)) - std::norm(phi(i*D + 1,0)));  // Add N factor
-            staggered += ((r+c)%2==0) ? sz : -sz;
-            ++count;
+    int wid = logical_qubits[qid].waveform_id;
+    if (wid < 0 || wid >= (int)waveforms.size()) {
+        std::cout << "[SpiralVM] No waveform found for qubit " << qid << "\n";
+        return;
+    }
+
+    // Find the main carrier tone for this qubit (assuming first tone is the dominant carrier)
+    size_t carrier_idx = -1;
+    for (size_t i = 0; i < waveforms[wid].tones.size(); ++i) {
+        if (waveforms[wid].tones[i].logical_id == (int)qid &&
+            std::abs(waveforms[wid].tones[i].freq - allocated_carriers[qid]) < 1e-6) {
+            carrier_idx = i;
+            break;
         }
     }
-    return staggered / (double)count;
+    if (carrier_idx == static_cast<size_t>(-1)) {
+        std::cout << "[SpiralVM] No carrier tone found for qubit " << qid << "\n";
+        return;
+    }
+
+    // Boost parameters: aim for pi rotation — strength scales with amp, duration with periods
+    // Tune boost_factor empirically (e.g., 10-50x) based on your h1/J/omega for ~pi flip
+    const double boost_factor = 20.0;  // Adjust this based on simulation calibration
+    double original_amp = waveforms[wid].tones[carrier_idx].amp;
+
+    // Apply boost
+    waveforms[wid].tones[carrier_idx].amp *= boost_factor;
+    waveforms[wid].tones[carrier_idx].amp = clamp_tone_amp(waveforms[wid].tones[carrier_idx].amp);
+
+    // Evolve for the specified duration (e.g., 0.5-1 period for pi pulse)
+    uint32_t steps = static_cast<uint32_t>(std::ceil(duration_periods));
+    run_periods(steps);
+
+    // Restore original amplitude
+    waveforms[wid].tones[carrier_idx].amp = original_amp;
+
+    std::cout << "[SpiralVM] Applied logical X pulse to qubit " << qid
+              << " over " << steps << " periods.\n";
 }
 
 double SpiralVM::measure_logical_Z(uint32_t qid) const {
@@ -710,25 +826,18 @@ void SpiralVM::logical_phase_ramp(int target_qid, double slope, int steps) {
 double SpiralVM::get_logical_phase(uint32_t qid) {
     if (qid >= logical_qubits.size()) return 0.0;
     const LogicalQubit &q = logical_qubits[qid];
-    complex<double> phase_sum(0.0, 0.0);
-    int count = 0;
-    for (int row = q.center_y - R; row <= q.center_y + R; ++row) {
-        if (row < 0 || row >= rows) continue;
-        for (int col = q.center_x - R; col <= q.center_x + R; ++col) {
-            if (col < 0 || col >= cols) continue;
-            int i = row*cols + col;
-            complex<double> amp1 = phi(i*D + 1,0);
-            if (abs(amp1) > 1e-12) {
-                phase_sum += amp1 / abs(amp1);
-                ++count;
-            }
-        }
-    }
-    if (count==0) return 0.0;
-    complex<double> avg_phase = phase_sum / (double)count;
-    return arg(avg_phase);
-}
 
+    // pick the center site of the qubit
+    int row = q.center_y;
+    int col = q.center_x;
+    if (row < 0 || row >= rows || col < 0 || col >= cols) return 0.0;
+
+    int i = row*cols + col;
+    // D offset: pick the "physical" component corresponding to the |1> amplitude
+    std::complex<double> amp_center = phi(i*D + 1,0);
+
+    return std::arg(amp_center);
+}
 
 double SpiralVM::logical_zz_correlation(uint32_t qid1, uint32_t qid2) {
     if (qid1 >= logical_qubits.size() || qid2 >= logical_qubits.size()) return 0.0;
@@ -737,113 +846,50 @@ double SpiralVM::logical_zz_correlation(uint32_t qid1, uint32_t qid2) {
     return z1 * z2;
 }
 
-void SpiralVM::apply_phase_shift(double angle) {
-    drive_phase += angle;
-}
-
-void SpiralVM::global_phase_ramp(double slope, int steps) {
-    for (int k = 0; k < steps; ++k) {
-        apply_phase_shift(slope);  // small increment each step
-        run_periods(1);            // let dynamics respond
-    }
-}
-
-
-void SpiralVM::apply_phase_kick_between(uint32_t qid1, uint32_t qid2,
-                                        double strength, double duration_fraction) {
+// Preferred / physical CZ implementation
+void SpiralVM::apply_phase_kick_between_full(uint32_t qid1, uint32_t qid2,
+                                             double zz_strength, double duration_fraction) {
     if (qid1 >= logical_qubits.size() || qid2 >= logical_qubits.size()) return;
 
-    const LogicalQubit &q1 = logical_qubits[qid1];
-    const LogicalQubit &q2 = logical_qubits[qid2];
+    // Generate CZ waveform with desired integrated ZZ
+    Waveform w = make_cz_waveform(qid1, qid2, zz_strength, duration_fraction);
 
-    // Estimate logical Z for each qubit (coarse, local)
-    auto logical_Z_estimate = [&](const LogicalQubit &q) {
-        double sum = 0.0;
-        int count = 0;
-        for (int row = q.center_y - R; row <= q.center_y + R; ++row) {
-            if (row < 0 || row >= rows) continue;
-            for (int col = q.center_x - R; col <= q.center_x + R; ++col) {
-                if (col < 0 || col >= cols) continue;
-                int i = row * cols + col;
-                double sz = N * (std::norm(phi(i*D + 0,0)) - std::norm(phi(i*D + 1,0)));  // Add N factor
-                sum += ((row + col) % 2 == 0) ? sz : -sz;
-                ++count;
+    int temp_wid = waveforms.size();
+    waveforms.push_back(std::move(w));
+
+    // Temporarily assign to both logical neighborhoods
+    std::vector<int> old_drive_indices;
+    for (int q : {qid1, qid2}) {
+        auto& qb = logical_qubits[q];
+        for (int r = qb.center_y - R; r <= qb.center_y + R; ++r) {
+            if (r < 0 || r >= rows) continue;
+            for (int c = qb.center_x - R; c <= qb.center_x + R; ++c) {
+                if (c < 0 || c >= cols) continue;
+                int idx = r * cols + c;
+                old_drive_indices.push_back(drive_index[idx]);  // save
+                drive_index[idx] = temp_wid;
             }
         }
-        return (count > 0) ? sum / (double)count : 0.0;
-    };
+    }
 
-    double Z1 = logical_Z_estimate(q1);
-    double Z2 = logical_Z_estimate(q2);
+    // Let the interaction act
+    run_periods(1);   // or more if duration_fraction > 1
 
-    // Conditional phase angle ~ Z1 * Z2
-    double theta = strength * duration_fraction * Z1 * Z2;
-    cx_double phase = std::exp(cx_double(0, theta));
-
-    // Apply only to |1> amplitudes in BOTH neighborhoods
-    for (int row = q1.center_y - R; row <= q1.center_y + R; ++row) {
-        if (row < 0 || row >= rows) continue;
-        for (int col = q1.center_x - R; col <= q1.center_x + R; ++col) {
-            if (col < 0 || col >= cols) continue;
-            int i = row * cols + col;
-            phi(i*D + 1,0) *= phase;
+    // Restore original drive assignments
+    size_t restore_idx = 0;
+    for (int q : {qid1, qid2}) {
+        auto& qb = logical_qubits[q];
+        for (int r = qb.center_y - R; r <= qb.center_y + R; ++r) {
+            if (r < 0 || r >= rows) continue;
+            for (int c = qb.center_x - R; c <= qb.center_x + R; ++c) {
+                if (c < 0 || c >= cols) continue;
+                int idx = r * cols + c;
+                drive_index[idx] = old_drive_indices[restore_idx++];
+            }
         }
     }
 
-    for (int row = q2.center_y - R; row <= q2.center_y + R; ++row) {
-        if (row < 0 || row >= rows) continue;
-        for (int col = q2.center_x - R; col <= q2.center_x + R; ++col) {
-            if (col < 0 || col >= cols) continue;
-            int i = row * cols + col;
-            phi(i*D + 1,0) *= phase;
-        }
-    }
-
-    // Renormalize
-    double norm = std::sqrt(real(inner_product_cl10(phi, phi)));
-    if (norm > 0) phi /= norm;
-}
-
-
-void SpiralVM::apply_phase_kick_between_full(uint32_t qid1, uint32_t qid2, double strength, double duration_fraction) {
-    // more detailed: temporarily inject a CZ waveform (uses make_cz_waveform) and run for one period
-    if (qid1 >= logical_qubits.size() || qid2 >= logical_qubits.size()) return;
-    Waveform w = make_cz_waveform(qid1,qid2,strength,duration_fraction);
-    int wid = waveforms.size();
-    waveforms.push_back(w);
-    // attach to neighborhoods
-    for (int row = logical_qubits[qid1].center_y - R; row <= logical_qubits[qid1].center_y + R; ++row) {
-        if (row < 0 || row >= rows) continue;
-        for (int col = logical_qubits[qid1].center_x - R; col <= logical_qubits[qid1].center_x + R; ++col) {
-            if (col < 0 || col >= cols) continue;
-            drive_index[row*cols + col] = wid;
-        }
-    }
-    for (int row = logical_qubits[qid2].center_y - R; row <= logical_qubits[qid2].center_y + R; ++row) {
-        if (row < 0 || row >= rows) continue;
-        for (int col = logical_qubits[qid2].center_x - R; col <= logical_qubits[qid2].center_x + R; ++col) {
-            if (col < 0 || col >= cols) continue;
-            drive_index[row*cols + col] = wid;
-        }
-    }
-    // run one or a few periods
-    run_periods(1);
-    // restore allocations
-    for (int row = logical_qubits[qid1].center_y - R; row <= logical_qubits[qid1].center_y + R; ++row) {
-        if (row < 0 || row >= rows) continue;
-        for (int col = logical_qubits[qid1].center_x - R; col <= logical_qubits[qid1].center_x + R; ++col) {
-            if (col < 0 || col >= cols) continue;
-            drive_index[row*cols + col] = logical_qubits[qid1].waveform_id;
-        }
-    }
-    for (int row = logical_qubits[qid2].center_y - R; row <= logical_qubits[qid2].center_y + R; ++row) {
-        if (row < 0 || row >= rows) continue;
-        for (int col = logical_qubits[qid2].center_x - R; col <= logical_qubits[qid2].center_x + R; ++col) {
-            if (col < 0 || col >= cols) continue;
-            drive_index[row*cols + col] = logical_qubits[qid2].waveform_id;
-        }
-    }
-    // optionally remove the waveform
+    // Optional: remove temp waveform to save memory
     // waveforms.pop_back();
 }
 
@@ -889,65 +935,6 @@ arma::sp_cx_mat SpiralVM::hamiltonian_cl10_90_spiral_twist_inhomogeneous(double 
         locations(0, nz) = i*D + 1; locations(1, nz) = i*D; values(nz) = -hx; nz++;
     }
     return arma::sp_cx_mat(locations.submat(0,0,1,nz-1), values.subvec(0,nz-1), N_local*D, N_local*D);
-}
-
-// ---------- compute zz energy and vector ----------
-double SpiralVM::compute_zz_energy(const arma::cx_mat& phi_inp, double J, double omega_ang, double period, bool is_angf) {
-    // Keep your original energy computation semantics, but simplified numerics
-    double energy = 0.0;
-    double theta_max_base = M_PI / 512.0;
-    double theta_max = theta_max_base * (1.0 - cos(M_PI * period / 2.0)) / 2.0;
-    double center_x = cols / 2.0, center_y = rows / 2.0;
-    double r_max = sqrt(center_x*center_x + center_y*center_y);
-    double norm_factor = sqrt((double)rows * cols);
-    for (int row = 0; row < rows; ++row) {
-        for (int col = 0; col < cols; ++col) {
-            int i = row * cols + col;
-            int j_right = row * cols + ((col + 1) % cols);
-            int j_down = ((row + 1) % rows) * cols + col;
-            double r = sqrt(sq(row - center_y) + sq(col - center_x));
-            double phi_ang = atan2(row - center_y, col - center_x);
-            double theta = (omega_ang == 0.0) ? 0.0 : theta_max * (r / r_max) * cos(omega_ang * phi_ang);
-            cx_double J_twist = is_angf ? J * cx_double(0, sin(theta)) : cx_double(J,0);
-            // approximate z projection:
-            cx_double zi = (phi_inp(i*D,0) - phi_inp(i*D + 1,0)) * norm_factor;
-            cx_double zjr = (phi_inp(j_right*D,0) - phi_inp(j_right*D + 1,0)) * norm_factor;
-            cx_double zjd = (phi_inp(j_down*D,0) - phi_inp(j_down*D + 1,0)) * norm_factor;
-            if (is_angf) {
-                energy += imag(J_twist * zi * zjr);
-                energy += imag(J_twist * zi * zjd);
-            } else {
-                energy += real(J_twist * zi * zjr);
-                energy += real(J_twist * zi * zjd);
-            }
-        }
-    }
-    return energy;
-}
-
-arma::cx_mat SpiralVM::compute_zz_energy_vector(const arma::cx_mat& phi_inp, double J, double omega_ang, double period, bool is_angf) {
-    arma::cx_mat Hzz_phi = arma::zeros<arma::cx_mat>(N*D, 1);
-    double theta_max_base = M_PI / 512.0;
-    double theta_max = theta_max_base * (1.0 - cos(M_PI * period / 2.0)) / 2.0;
-    double center_x = cols / 2.0, center_y = rows / 2.0;
-    double r_max = sqrt(center_x*center_x + center_y*center_y);
-    double norm_factor = sqrt((double)N);
-    for (int row = 0; row < rows; ++row) {
-        for (int col = 0; col < cols; ++col) {
-            int i = row * cols + col;
-            int j_right = row * cols + ((col + 1) % cols);
-            int j_down = ((row + 1) % rows) * cols + col;
-            double r = sqrt(sq(row - center_y) + sq(col - center_x));
-            double phi_ang = atan2(row - center_y, col - center_x);
-            double theta = (omega_ang == 0.0) ? 0.0 : theta_max * (r / r_max) * cos(omega_ang * phi_ang);
-            cx_double J_twist = is_angf ? J * cx_double(0, sin(theta)) : cx_double(J,0);
-            cx_double zjr = (phi_inp(j_right*D,0) - phi_inp(j_right*D + 1,0)) * norm_factor;
-            cx_double zjd = (phi_inp(j_down*D,0) - phi_inp(j_down*D + 1,0)) * norm_factor;
-            Hzz_phi(i*D,0) = J_twist * (zjr + zjd) * phi_inp(i*D,0);
-            Hzz_phi(i*D + 1,0) = J_twist * (-zjr - zjd) * phi_inp(i*D + 1,0);
-        }
-    }
-    return Hzz_phi;
 }
 
 // ---------- Edge-aware neighbor lookup ----------
@@ -1040,7 +1027,7 @@ double SpiralVM::sx_avg(int n) {
     return sx_sum / (double)N;
 }
 
-double SpiralVM::omega_ang_end(int n) {
+double SpiralVM::omega_ang_end(int n) const {
     double t_end = n * T;
     double quasi = is_ang ? (sin(omega * M_PI * t_end / T) + sin(2*omega * M_PI * t_end / T)) : 0.0;
     return omega_ang_base + quasi;
@@ -1078,15 +1065,118 @@ double SpiralVM::compute_avg_stabilizer(const arma::cx_mat& phi_inp) {
     return (count>0) ? stab_sum / (double)count : 0.0;
 }
 
-void SpiralVM::print_overlap_stats() {
-    if (!overlap_enabled) {
-        cout << "[SpiralVM] Overlap mode disabled.\n";
+// Dumps effective Hamiltonian components to CSV for the current period.
+// Includes: period, site_idx, local_hx (transverse field per site), omega_ang,
+// and global tone details (amp,freq,phase per tone).
+// Call this in step_period after computing local_hx and omega_ang.
+void SpiralVM::dump_h_eff(const std::string& fname_base, int period) const {
+    std::string fname = fname_base + "_h_eff_period" + (period < 0 ? "_latest" : std::to_string(period)) + ".csv";
+    std::ofstream fout(fname);
+    if (!fout) {
+        std::cerr << "[SpiralVM] Failed to open " << fname << " for h_eff dump\n";
         return;
     }
+
+    int curr_period = (period < 0) ? current_period : period;
+    // Header
+    fout << "# SpiralVM h_eff Dump\n";
+    fout << "# Period: " << curr_period << "\n";
+    fout << "# T (s): " << T << "\n";
+    fout << "# omega_ang: " << omega_ang_end(curr_period) << "\n";  // End-of-period angular mod
+    fout << "# J: " << J << "\n";
+    fout << "# Columns: site_idx,local_hx,drive_wid\n";
+
+    // Per-site local_hx and drive index (computed at t_end for simplicity)
+    double t_end = curr_period * T;
     for (int i = 0; i < N; ++i) {
-        int count = phys_to_logicals[i].size();
-        if (count > 1) {
-            cout << "Physical qubit " << i << " belongs to " << count << " logical qubits.\n";
+        int wid = drive_index[i];
+        double local_hx_val = h0;
+        if (wid >= 0 && wid < (int)waveforms.size()) {
+            local_hx_val += eval_waveform_with_envelope(waveforms[wid], t_end, drive_phase);
+        } else {
+            // Fallback (from your step_period)
+            local_hx_val += h1 * cos(omega * (t_end / 2.0) + M_PI/4.0 + drive_phase);
+        }
+        fout << i << "," << local_hx_val << "," << wid << "\n";
+    }
+
+    // Section for global/merged tones (if compiled)
+    fout << "# Tones (global if compiled): tone_idx,amp,freq,phase,logical_id\n";
+    if (!waveforms.empty()) {
+        const Waveform& global_w = waveforms[0];  // Assuming compiled to 0
+        for (size_t t = 0; t < global_w.tones.size(); ++t) {
+            const auto& tn = global_w.tones[t];
+            fout << t << "," << tn.amp << "," << tn.freq << "," << tn.phase << "," << tn.logical_id << "\n";
         }
     }
+
+    fout.close();
+    std::cout << "[SpiralVM] Dumped h_eff to " << fname << "\n";
+}
+
+// Reconstructs approximate amplitude and phase for a logical qubit from a dumped waveform CSV.
+// Assumes CSV from dump_waveforms("csv", ...) with columns: time_s,I,Q,amp,phase_rad
+// Uses FFT on the complex IQ signal to find the component at the qubit's carrier freq.
+// Returns a pair: <amplitude, phase> at the carrier.
+// For in-memory: overload with bool from_file = true; if false, sample current global waveform in-memory.
+std::pair<double, double> SpiralVM::reconstruct_logical_amp_phase_from_csv(const std::string& fname, uint32_t qid, bool from_file = true) {
+    if (qid >= logical_qubits.size() || qid >= allocated_carriers.size()) {
+        std::cout << "[SpiralVM] Invalid qid " << qid << " for reconstruction\n";
+        return {0.0, 0.0};
+    }
+    double carrier_freq = allocated_carriers[qid];
+
+    arma::vec times;
+    arma::cx_vec iq;
+
+    if (from_file) {
+        // Load from CSV
+        std::ifstream fin(fname);
+        if (!fin) {
+            std::cerr << "[SpiralVM] Failed to open " << fname << " for reconstruction\n";
+            return {0.0, 0.0};
+        }
+
+        std::string line;
+        std::vector<double> t_vec, i_vec, q_vec;
+        while (std::getline(fin, line)) {
+            if (line.empty() || line[0] == '#') continue;  // Skip headers/comments
+            std::stringstream ss(line);
+            std::string token;
+            std::vector<std::string> cols;
+            while (std::getline(ss, token, ',')) cols.push_back(token);
+            if (cols.size() < 5) continue;  // time,I,Q,amp,phase
+            t_vec.push_back(std::stod(cols[0]));
+            i_vec.push_back(std::stod(cols[1]));
+            q_vec.push_back(std::stod(cols[2]));
+        }
+        fin.close();
+
+        times = arma::vec(t_vec);
+        iq = arma::cx_vec(arma::vec(i_vec), arma::vec(q_vec));
+    } else {
+        // In-memory: sample current global waveform (id 0)
+        double dt = T / 1000.0;  // Match dump resolution
+        arma::vec amps, phases;  // Unused
+        sample_waveform(waveforms[0], 0.0, dt, times, iq, amps, phases);
+    }
+
+    if (times.empty() || iq.empty()) {
+        std::cout << "[SpiralVM] No data for reconstruction of q" << qid << "\n";
+        return {0.0, 0.0};
+    }
+
+    // FFT of IQ signal
+    arma::cx_vec fft_iq = arma::fft(iq);
+    arma::vec freqs = arma::linspace<arma::vec>(0, 1.0 / (times(1) - times(0)), iq.n_elem);
+
+    // Find index closest to carrier_freq
+    arma::uword idx = arma::index_min(arma::abs(freqs - carrier_freq));
+    std::complex<double> component = fft_iq(idx) / static_cast<double>(iq.n_elem);  // Normalize
+
+    double amp = std::abs(component);
+    double phase = std::arg(component);
+
+    std::cout << "[SpiralVM] Reconstructed for q" << qid << ": amp=" << amp << ", phase=" << phase << "\n";
+    return {amp, phase};
 }

@@ -102,20 +102,30 @@ public:
     void ramp_omega_ang(double start, double end, double duration_seconds);
     void global_pi_pulse();
     void logical_hadamard(uint32_t qid);
+    void apply_T_gate(uint32_t qid, int steps);
+    double get_logical_phase_frame_corrected(uint32_t qid);
+    int find_waveform_index_for_qubit(uint32_t qid);
+    void logical_x_pulse(uint32_t qid, double duration_periods);
+    void logical_cz(uint32_t control, uint32_t target);
+    void logical_controlled_phase(uint32_t control, uint32_t target,
+                                        double max_angle, double duration_periods);
 
     // Printing Wavforms
     void dump_waveforms(const std::string& format = "csv",  // "csv" or "json"
         const std::string& prefix = "waveform_",
                     int period = -1) const;               // -1 = current/latest
+    void dump_h_eff(const std::string& fname_base, int period = -1) const;
 
     // Helper to sample a waveform over one period
     void sample_waveform(const Waveform& w, double t_start, double dt, arma::vec& times, arma::cx_vec& iq, arma::vec& amps, arma::vec& phases) const;
     void compile_to_physical_waveform();  // Compiles all logical waveforms into a single global physical waveform (multi-tone broadcast)
     void dump_frequency_mapping(const std::string& fname = "frequency_to_logical.json") const;
 
+    std::pair<double, double> reconstruct_logical_amp_phase_from_csv(const std::string& fname, uint32_t qid, bool from_file);
+
     // Initialization and simulation control
     void initialize_state(const std::string& initial_state = "neel");
-    double omega_ang_end(int n);
+    double omega_ang_end(int n) const;
     double h_effective_end(int n);
     double sx_avg(int n);
     int get_period();

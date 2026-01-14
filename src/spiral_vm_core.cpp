@@ -585,6 +585,8 @@ void SpiralVM::step_period(int n, double &delta_F) {
     double fid = fabs(inner_product_cl10(phi_in, phi));
     if ((int)fidelities.size() <= current_period+1) fidelities.resize(current_period+2, 0.0);
     fidelities[current_period+1] = fid;
+    //std::cout << "period: " << current_period+1 << " fidelity: " << fid << std::endl;
+    //std::cout << std::flush;
     delta_F = 1.0 - fid;
 
     std::string fname_base = "waveform_" + std::to_string(current_period);
@@ -1052,6 +1054,10 @@ double SpiralVM::h_effective_end(int n) {
     if (h_eff / J > h1_limit) h_eff = h1_limit * J;
     else if (h_eff / J < -h1_limit) h_eff = -h1_limit * J;
     return h_eff;
+}
+
+int SpiralVM::get_period() {
+    return current_period + 1;
 }
 
 double SpiralVM::compute_avg_stabilizer(const arma::cx_mat& phi_inp) {

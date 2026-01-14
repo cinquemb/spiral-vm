@@ -1,16 +1,16 @@
 // examples/max_pack.cpp
-// Pack MAX logical qubits in 30×30 physical region → ~30 qubits total capacity
+// Pack MAX logical qubits
 #include "../src/spiral_vm_core.hpp"
 #include <iostream>
 #include <vector>
 
 int main() {
-    const int max_n = 50;
+    const int max_n = 100;
     SpiralVM vm(max_n, max_n);
     vm.is_ang = true;
     vm.initialize_state("neel");
 
-    // ULTRA-DENSE: 900 logicals in 30×30 block (900 phys sites)
+    // ULTRA-DENSE
     std::vector<uint32_t> qubits;
     int x_base = max_n/2, y_base = max_n/2;
     
@@ -30,7 +30,7 @@ int main() {
     vm.run_periods(1);
     
     // Test all-to-all control: X all qubits
-    // SINGLE GLOBAL PULSE - flips ALL 900 logical qubits instantly
+    // SINGLE GLOBAL PULSE - flips ALL logical qubits instantly
     vm.global_pi_pulse();  
     
     vm.run_periods(1);
@@ -55,12 +55,5 @@ int main() {
     std::cout << "Avg Z (stable qubits) = " << avg_z/counted 
               << ", Néel order = " << neel_order/counted 
               << " over " << counted << " stable qubits\n";
-
-
-
-
-
-
-
     return 0;
 }

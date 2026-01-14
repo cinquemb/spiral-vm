@@ -26,6 +26,22 @@ Packed 900 logical qubits in 30×30 phys block
 [SpiralVM] Dumped frequency → logical qubit mapping to frequency_to_logical.json
 Avg Z (stable qubits) = -0.999996, Néel order = -7.15477e-18 over 900 stable qubits
 
+ time ./max_pack > max_pack_test.txt; tail max_pack_test.txt
+
+real  15m16.452s
+user  15m11.984s
+sys 0m0.845s
+[SpiralVM] Added logical qubit 9994 @(144,149), wf=9995
+[SpiralVM] Added logical qubit 9995 @(145,149), wf=9996
+[SpiralVM] Added logical qubit 9996 @(146,149), wf=9997
+[SpiralVM] Added logical qubit 9997 @(147,149), wf=9998
+[SpiralVM] Added logical qubit 9998 @(148,149), wf=9999
+[SpiralVM] Added logical qubit 9999 @(149,149), wf=10000
+Packed 10000 logical qubits in 100 x 100phys block
+[SpiralVM] Compiled to single physical global waveform with 20001 merged tones (logical IDs preserved)
+[SpiralVM] Dumped frequency → logical qubit mapping to frequency_to_logical.json
+Avg Z (stable qubits) = -0.999212, Néel order = 1.27676e-18 over 10000 stable qubits
+
 ```
 
 
@@ -59,7 +75,7 @@ sys 0m0.020s
 ```
 
 
-The "31-Bit" Milestone (INT_MAX) "Universal, fault-tolerant factorization of a 31-bit integer (\(N=2,147,483,641\)) in 3m 18s. This demo verifies the SpiralVM architecture at the absolute limit of 32-bit signed computing. By utilizing a 20x20 physical block (400 spins), the engine maintained topological stability through a 62-period modular exponentiation depth using a single 7-tone global waveform. Key Achievement: Proven 1:1 physical-to-logical overhead for cryptographically relevant register depths. Total memory footprint remained under 1MB, effectively bypassing the 'memory wall' that restricts standard Hilbert-space simulators. The system is now officially hardware-starved; Phase 1 (Universal VM) is complete."
+The "31-Bit" Milestone (INT_MAX) Universal, fault-tolerant factorization of a 31-bit integer (\(N=2,147,483,641\)) in 3m 18s. This demo verifies the SpiralVM architecture at the absolute limit of 32-bit signed computing. By utilizing a 20x20 physical block (400 spins), the engine maintained topological stability through a 62-period modular exponentiation depth using a single 7-tone global waveform. Key Achievement: Proven 1:1 physical-to-logical overhead for cryptographically relevant register depths. Total memory footprint remained under 1MB, effectively bypassing the 'memory wall' that restricts standard Hilbert-space simulators. The system is now officially hardware-starved; Phase 1 (Universal VM) is complete.:
 ```bash
 $ g++ -O2 ../src/spiral_vm_core.cpp shors_demo.cpp -o shors_demo -larmadillo -llapack -lblas
 $ time ./shors_demo 2147483641 20 > shors_demo.txt; cat shors_demo.txt
@@ -139,6 +155,68 @@ sys 0m0.064s
 [Shor] Classical GCD: 2699, 795659
 [Shor] SUCCESS: 2147483641 = 2699 × 795659
 [Shor] Post-algorithm fidelity: Z0=0, Z1=0, Z2=-0.999938
+```
+
+Update (Jan 14, 2026): De-Aliasing the Attractor"Removed the classical brute-force fallback. The SpiralVM now extracts the period \(r\) directly from the phase-space recurrence of the register:
+```
+ time ./shors_demo_q 51 2 > shors_demo.txt; cat shors_demo.txt 
+
+real  0m37.275s
+user  0m32.416s
+sys 0m1.513s
+[Shor] Attempt #1...
+[SpiralVM] Initialized (neel), norm0=2
+[SpiralVM] Added logical qubit 0 @(2,2), wf=1
+[SpiralVM] Added logical qubit 1 @(3,2), wf=2
+[SpiralVM] Added logical qubit 2 @(4,2), wf=3
+[SpiralVM] Added logical qubit 3 @(5,2), wf=4
+[SpiralVM] Added logical qubit 4 @(2,3), wf=5
+[SpiralVM] Added logical qubit 5 @(3,3), wf=6
+[SpiralVM] Added logical qubit 6 @(4,3), wf=7
+[SpiralVM] Added logical qubit 7 @(5,3), wf=8
+[SpiralVM] Added logical qubit 8 @(2,4), wf=9
+[SpiralVM] Added logical qubit 9 @(3,4), wf=10
+[SpiralVM] Added logical qubit 10 @(4,4), wf=11
+[SpiralVM] Added logical qubit 11 @(5,4), wf=12
+[SpiralVM] Added logical qubit 12 @(6,6), wf=13
+[SpiralVM] Compiled to single physical global waveform with 27 merged tones (logical IDs preserved)
+[SpiralVM] Dumped frequency → logical qubit mapping to frequency_to_logical.json
+[Shor] Random base a=13 (coprime to 51)
+[Shor] Phase Z: -0.999315 0 0 0 0 0 0 0 0 0 0 0
+[Shor] Work Z=0
+[Shor] Estimated period r=12
+[Shor] SUCCESS: 51 = 3 × 17
+
+time ./shors_demo_q 85 3 > shors_demo.txt; cat shors_demo.txt 
+
+real  1m28.817s
+user  1m18.685s
+sys 0m3.084s
+[Shor] Attempt #1...
+[SpiralVM] Initialized (neel), norm0=3
+[SpiralVM] Added logical qubit 0 @(2,2), wf=1
+[SpiralVM] Added logical qubit 1 @(3,2), wf=2
+[SpiralVM] Added logical qubit 2 @(4,2), wf=3
+[SpiralVM] Added logical qubit 3 @(5,2), wf=4
+[SpiralVM] Added logical qubit 4 @(2,3), wf=5
+[SpiralVM] Added logical qubit 5 @(3,3), wf=6
+[SpiralVM] Added logical qubit 6 @(4,3), wf=7
+[SpiralVM] Added logical qubit 7 @(5,3), wf=8
+[SpiralVM] Added logical qubit 8 @(2,4), wf=9
+[SpiralVM] Added logical qubit 9 @(3,4), wf=10
+[SpiralVM] Added logical qubit 10 @(4,4), wf=11
+[SpiralVM] Added logical qubit 11 @(5,4), wf=12
+[SpiralVM] Added logical qubit 12 @(2,5), wf=13
+[SpiralVM] Added logical qubit 13 @(6,6), wf=14
+[SpiralVM] Compiled to single physical global waveform with 29 merged tones (logical IDs preserved)
+[SpiralVM] Dumped frequency → logical qubit mapping to frequency_to_logical.json
+[Shor] Random base a=69 (coprime to 85)
+[Shor] Phase Z: -0.978501 -0.978501 0 0 -0.978501 -0.978501 0 0 0 0 0 0 0
+[Shor] Work Z=0
+[Shor] Estimated period r=26
+[Shor] SUCCESS: 85 = 17 × 5
+
+
 ```
 
 

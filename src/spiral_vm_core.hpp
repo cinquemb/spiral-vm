@@ -118,6 +118,7 @@ public:
     double omega_ang_end(int n);
     double h_effective_end(int n);
     double sx_avg(int n);
+    int get_period();
     void print_overlap_stats();
 
 private:

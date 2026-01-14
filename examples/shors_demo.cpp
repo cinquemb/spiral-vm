@@ -7,12 +7,10 @@
 #include <cstdlib>  // for rand, srand
 #include <ctime>    // for time
 #include <numeric>  // for gcd
-
 // Helper: Check if two numbers are coprime
 bool is_coprime(int a, int b) {
     return std::gcd(a, b) == 1;
 }
-
 // Helper: Modular exponentiation (classical, for verification)
 long long mod_pow(long long base, long long exp, long long mod) {
     long long result = 1;
@@ -26,35 +24,28 @@ long long mod_pow(long long base, long long exp, long long mod) {
     }
     return result;
 }
-
 int main(int argc, char* argv[]) {
     if (argc < 2) {
         std::cerr << "Usage: ./shors_demo <N> [lattice_size=8]\n";
         std::cerr << "Example: ./shors_demo 15\n";
         return 1;
     }
-    
     const int N = std::atoi(argv[1]);
     const int n_qubits = (argc > 2) ? std::atoi(argv[2]) : 8;  // Default 8x8 phys block
     if (N < 2 || N % 2 == 0) {
         std::cerr << "[Shor] N must be odd semiprime >1. Even numbers trivial.\n";
         return 1;
     }
-    
     SpiralVM vm(n_qubits, n_qubits);
     vm.is_ang = true;
     vm.initialize_state("neel");
-
     std::cout << "[Shor] Factor " << N << " using SpiralVM logical qubits (global drive only)\n";
-    
     // Create 3 logical qubits (q0: exponent reg, q1: period finder, q2: work/ancilla)
     uint32_t q0 = vm.add_qubit(3,3);
     uint32_t q1 = vm.add_qubit(3,5);
     uint32_t q2 = vm.add_qubit(5,4);
-    
     std::cout << "[Shor] Created 3 logical qubits, compiling global waveform...\n";
     vm.compile_to_physical_waveform();
-
     // Pick random a coprime to N
     srand(time(NULL));
     int a;
@@ -102,34 +93,27 @@ int main(int argc, char* argv[]) {
         }
     }
     std::cout << "[Shor] Period r=" << r << "\n";
-    
     // If r odd, try next even multiple (robustness for non-even r)
     if (r % 2 != 0) {
         r *= 2;
         std::cout << "[Shor] Adjusted to even r=" << r << "\n";
     }
-    
     // Classical post-processing: Factors from a^{r/2} ±1
     int k = r / 2;
     long long a_k = mod_pow(a, k, N);
-    
     int factor1 = std::gcd(N, (int)std::abs(a_k - 1));
     int factor2 = std::gcd(N, (int)std::abs(a_k + 1));
-    
     if (factor1 == 1 || factor1 == N) {
         std::cerr << "[Shor] Trivial factors; try different a.\n";
         return 1;
     }
-    
     std::cout << "[Shor] Classical GCD: " << factor1 << ", " << factor2 << "\n";
     std::cout << "[Shor] SUCCESS: " << N << " = " << factor1 << " × " << (N / factor1) << "\n";
-    
     // Verify logical qubits still alive
     double z0 = vm.measure_logical_Z(q0);
     double z1 = vm.measure_logical_Z(q1);
     double z2 = vm.measure_logical_Z(q2);
     std::cout << "[Shor] Post-algorithm fidelity: Z0=" << z0 
               << ", Z1=" << z1 << ", Z2=" << z2 << "\n";
-    
     return 0;
 }

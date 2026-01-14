@@ -339,3 +339,39 @@ We just admit Phase 1 is done and Phase 2 is next.
 Contributions from experimentalists very, very welcome.
 
 If you believe this is a numerical artifact, please specify which line of code you believe produces it.
+
+
+### Areas for Improvement – Especially Frequency & Spatial Multiplexing
+
+- **Carrier Frequency Allocation & Packing Density**  
+  Current greedy back-off allocator works for hundreds of logicals but suffers collisions and wasted spectrum at scale (10k+ logicals).  
+  → Better: optimal non-uniform spacing, dynamic reallocation, OFDM-style guard bands, or AI-guided packing to maximize carriers without destructive interference.
+
+- **Tone Merging & Crosstalk Mitigation**  
+  Simple amplitude summing in `compile_to_physical_waveform()` causes intermodulation products and phase bleed between logicals.  
+  → Better: predistortion/compensation of amplitudes/phases before merging, adaptive lowpass/nonlinear filtering, or sideband suppression techniques to preserve logical orthogonality.
+
+- **Per-Logical Addressability in Global Drive**  
+  All gates are broadcast; logical isolation relies entirely on neighborhood averaging + frequency orthogonality.  
+  → Better: temporary carrier boosts, chirp/FM modulation during gates, or beat-frequency tricks to make CZ/CNOT more selective without local control hardware.
+
+- **Readout / Observable Extraction**  
+  Current Z/phase averages over neighborhoods lose fine phase gradients and are blind to coherences.  
+  → Better: time-domain sampling per logical neighborhood, FFT-based carrier extraction, cross-correlation between tones, or wavelet-style decomposition to recover per-logical phase/amplitude more cleanly.
+
+- **Nonlinear Mixing & Hamiltonian Artifacts**  
+  RK4 evolution under multi-tone drive produces unwanted mixing products that degrade fidelity over many periods.  
+  → Better: analytical bounds on intermodulation, digital pre-compensation for known nonlinearities, or Volterra-series modeling to predict/correct distortion.
+
+- **Waveform Design & Envelope Control**  
+  Tones are constant-amplitude + crude lowpass; no real gating or shaped envelopes.  
+  → Better: Hann/raised-cosine envelopes, AM/FM modulation per logical during gates, or polyphase filterbank ideas to enable cleaner time-slicing.
+
+- **Scalability & Performance Bottlenecks**  
+  Setup time explodes with logical count (add_qubit loops + vector push_backs); runtime per period is still linear in physical sites.  
+  → Better: flatter data structures (fixed-size arrays), parallelized compilation/merging, SIMD/RK4 optimizations, or GPU offload for large lattices.
+
+- **Validation & Benchmark Suite**  
+  No systematic tests for logical orthogonality, gate fidelity vs. logical count, or revival quality under heavy overlap.  
+  → Better: automated benchmarks (fidelity decay curves, crosstalk metrics, success rate on toy circuits) to quantify improvements.
+

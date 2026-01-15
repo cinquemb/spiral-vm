@@ -34,6 +34,7 @@ SpiralVM::SpiralVM(int r, int c)
   fidelity_window(32, 0.0),
   waveforms(),
   drive_index(N, -1),
+  virtual_frame_phase(32, 0.0),
   R((int)(sqrt((double)r*(double)c) * 0.5)), // Physical neighborhood radius around each logical qubit's center, this is the optimal
   allocated_carriers()
 {
@@ -544,6 +545,15 @@ void SpiralVM::apply_gate(const Gate& g, double period_time) {
     // run_periods(1);   // ← you may want this depending on your timing model
 }
 
+void SpiralVM::virtual_phase_gate(uint32_t qid, double angle) {
+    if (qid >= virtual_frame_phase.size()) 
+        virtual_frame_phase.resize(qid + 1, 0.0);
+    virtual_frame_phase[qid] += angle;
+    std::cout << "[SpiralVM] Virtual phase gate on q" << qid << ": φ_frame = " << virtual_frame_phase[qid] << "\n";
+    // NO hardware interaction, NO decoherence!
+}
+
+
 // Controlled phase gate — the most important two-qubit gate
 // Implements a hardware-like entangling gate by temporarily applying
 // an interaction waveform (carriers + beat/interaction tone) to both qubit neighborhoods.
@@ -785,12 +795,16 @@ void SpiralVM::logical_x_pulse(uint32_t qid, double duration_periods) {
     std::vector<int> saved_drive_index = drive_index;
     double original_amp = waveforms[wid].tones[carrier_idx].amp;
     
-    // BOOST + COMPILE
-    waveforms[wid].tones[carrier_idx].amp *= LOGICAL_X_AMPLITUDE;
+    // BOOST + ORBIT ALIGN (1 extra line!)
+    waveforms[wid].tones[carrier_idx].amp *= LOGICAL_X_AMPLITUDE * cos(current_period * M_PI/T);
+    waveforms[wid].tones[carrier_idx].phase += M_PI;  // LIVE ON SPIRAL!
     waveforms[wid].tones[carrier_idx].amp = clamp_tone_amp(waveforms[wid].tones[carrier_idx].amp);
+    std::cout << "[DEBUG] waveforms[wid].tones[carrier_idx].phase=" << waveforms[wid].tones[carrier_idx].phase << "\n";
+
     compile_to_physical_waveform();
     
     std::cout << "[DEBUG] physical[0].amp=" << physical_waveform.tones[0].amp << "\n";
+    std::cout << "[DEBUG] physical[0].phase=" << physical_waveform.tones[0].phase << "\n";
     
     // PULSE WITH NO SIDE EFFECTS
     bool saved_auto = auto_compile_enabled;
@@ -832,6 +846,19 @@ double SpiralVM::measure_logical_Z(uint32_t qid) const {
 
     return (count > 0) ? staggered / (double)count : 0.0;
 }
+
+double SpiralVM::measure_logical_Z_frame_corrected(uint32_t qid) const {
+    double physical_z = measure_logical_Z(qid);
+    
+    // Virtual frame compensation: rotate measured value
+    if (qid < virtual_frame_phase.size()) {
+        double frame = virtual_frame_phase[qid];
+        return physical_z * std::cos(frame) + measure_logical_X(qid) * std::sin(frame);
+        // Perfect frame rotation in measurement basis
+    }
+    return physical_z;
+}
+
 
 // In spiral_vm_core.cpp
 double SpiralVM::measure_logical_X(uint32_t qid) const {
@@ -881,7 +908,9 @@ void SpiralVM::logical_phase_ramp(int target_qid, double slope, int steps) {
                 }
             }
         }
-        run_periods(1);
+
+        compile_to_physical_waveform();  // rebuild merged drive
+        run_periods(1);                  // let it act on φ
     }
 }
 

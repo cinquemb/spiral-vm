@@ -10,7 +10,6 @@
 #include <string>
 #include <limits>
 
-static constexpr double LOGICAL_X_AMPLITUDE = 1450000.0;
 
 
 // Minimal footprint Waveform/Tone types (kept public for test scripting)
@@ -65,6 +64,9 @@ struct Gate {
 class SpiralVM {
 public:
     SpiralVM(int rows, int cols);  // constructor
+    double LOGICAL_X_AMPLITUDE = 1396999.7245;
+    double PHASE_RAMP_MAGNITUDE = 0.5;
+
 
     static constexpr int D = 2;
     const int R; // Physical neighborhood radius around each logical qubit's center
@@ -136,6 +138,10 @@ public:
     int get_period();
     void print_overlap_stats();
 
+    // Add these 2 methods
+    void virtual_phase_gate(uint32_t qid, double angle);  // Virtual T/Z: NO decoherence
+    double measure_logical_Z_frame_corrected(uint32_t qid) const;  // Applies virtual compensation
+
 private:
     // internal state
     double omega_ang_base;
@@ -168,6 +174,10 @@ private:
     Waveform physical_waveform;               // index 0 only: merged physical;
     std::vector<int> drive_index;          // size N, drive_index[i] = waveform ID
 
+
+    std::vector<double> virtual_frame_phase;  // VIRTUAL Z: infinite T2 bookkeeping
+
+
     // Frequency allocation bookkeeping
     std::vector<double> allocated_carriers;
 
@@ -196,6 +206,7 @@ private:
     int get_down_neighbor(int row, int col) const;
 
     double compute_avg_stabilizer(const arma::cx_mat& phi);
+    double current_orbit_phase(uint32_t qid) const;
 
     // Safety helpers
     double clamp_tone_amp(double a) const;

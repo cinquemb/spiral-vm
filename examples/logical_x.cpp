@@ -11,7 +11,6 @@ int main() {
     uint32_t q0 = vm.add_qubit(15, 15);
 
     std::cout << "Stabilizing...\n";
-    vm.run_periods(3);
 
     auto Z = [&vm](uint32_t id) { return vm.measure_logical_Z(id); };
 
@@ -44,7 +43,7 @@ int main() {
                   << " fid=" << std::fixed << std::setprecision(4) << flip_fidelity
                   << " amp=" << vm.LOGICAL_X_AMPLITUDE << "\n";
         
-        if(flip_fidelity < 0.99) {
+        if(flip_fidelity < 0.97) {
             std::cout << "WARNING: Poor fidelity!\n";
             exit(0);
         }

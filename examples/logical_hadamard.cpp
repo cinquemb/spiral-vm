@@ -11,7 +11,6 @@ int main() {
     SpiralVM vm_cal(30, 30);
     vm_cal.initialize_state("neel");
     uint32_t q0 = vm_cal.add_qubit(15, 15);
-    vm_cal.run_periods(1);
     
     auto Z = [&vm_cal](uint32_t id) { return vm_cal.measure_logical_Z(id); };
     auto X = [&vm_cal](uint32_t id) { return vm_cal.measure_logical_X(id); };
@@ -25,12 +24,11 @@ int main() {
     
     for(double slope : z_slopes) {
         // Reset to |0⟩_L using XX (clean start each time)
-        vm_cal.logical_x_pulse(q0, 1); vm_cal.run_periods(1);
-        vm_cal.logical_x_pulse(q0, 1); vm_cal.run_periods(1);
+        vm_cal.logical_x_pulse(q0, 1);
+        vm_cal.logical_x_pulse(q0, 1);
         
         // Apply Z rotation
-        vm_cal.logical_phase_ramp(q0, slope, 1);
-        vm_cal.run_periods(1);
+        vm_cal.logical_phase_ramp(q0, slope*M_PI, 1);
         
         double x_meas = X(q0);
         double x_error = std::abs(x_meas - 0.0);
@@ -53,27 +51,25 @@ int main() {
     SpiralVM vm_test(30, 30);
     vm_test.initialize_state("neel");
     q0 = vm_test.add_qubit(15, 15);
-    vm_test.run_periods(1);
     
     auto Z_test = [&vm_test](uint32_t id) { return vm_test.measure_logical_Z(id); };
     auto X_test = [&vm_test](uint32_t id) { return vm_test.measure_logical_X(id); };
     
     // Start in |0⟩_L: ⟨Z⟩=+1, ⟨X⟩=0
-    vm_test.logical_x_pulse(q0, 1); vm_test.run_periods(1);
-    vm_test.logical_x_pulse(q0, 1); vm_test.run_periods(1);
+    vm_test.logical_x_pulse(q0, 1);
+    vm_test.logical_x_pulse(q0, 1);
     
     std::cout << "Before H: ⟨Z_L⟩ = " << Z_test(q0) << ", ⟨X_L⟩ = " << X_test(q0) << "\n";
     
     // PERFECT Hadamard using calibrated slope
-    vm_test.logical_phase_ramp(q0,  best_z_slope, 1);  // Z(+π/2)
+    vm_test.logical_phase_ramp(q0,  best_z_slope*M_PI, 1);  // Z(+π/2)
     vm_test.logical_x_pulse(q0, 1);                    // X
-    vm_test.logical_phase_ramp(q0, -best_z_slope, 1);  // Z(-π/2)
-    vm_test.run_periods(1);
+    vm_test.logical_phase_ramp(q0, -best_z_slope*M_PI, 1);  // Z(-π/2)
     
     std::cout << "After H:  ⟨Z_L⟩ = " << Z_test(q0) << ", ⟨X_L⟩ = " << X_test(q0) << "\n";
     std::cout << "Expected: Z≈0.0, X≈+1.0\n";
     
-    double h_fidelity = std::abs(X_test(q0));
+    double h_fidelity = std::abs(Z_test(q0));  // Hadamard |0⟩_Z → |+⟩_X has ⟨Z⟩=0!
     std::cout << "Hadamard fidelity: " << std::fixed << std::setprecision(4) << h_fidelity << "\n";
     
     return 0;

@@ -755,6 +755,36 @@ void SpiralVM::logical_hadamard(uint32_t qid) {
     logical_phase_ramp(qid, -M_PI/2.0, 1);
 }
 
+double SpiralVM::current_orbit_phase(uint32_t qid) const {
+    if (qid >= logical_qubits.size()) return 0.0;
+
+    int wid = logical_qubits[qid].waveform_id;
+    if (wid < 0 || wid >= (int)waveforms.size()) return 0.0;
+
+    // Find the main carrier tone for this qubit
+    for (const auto& tn : waveforms[wid].tones) {
+        if (tn.logical_id == static_cast<int>(qid) &&
+            std::abs(tn.freq - allocated_carriers[qid]) < 1e-6) {
+
+            // Base phase of the tone
+            double tone_phase = tn.phase;
+
+            // Add accumulated phase from frequency over time
+            double accumulated = tn.freq * (current_period * T);
+
+            // Subtract global drive phase (so it's relative to the global modulation frame)
+            double relative_phase = tone_phase + accumulated - drive_phase;
+
+            // Normalize to [0, 2π)
+            return fmod(relative_phase, 2.0 * M_PI);
+        }
+    }
+
+    // Fallback: use global drive phase only
+    return fmod(-drive_phase, 2.0 * M_PI);
+}
+
+
 // Applies a logical X (pi rotation) to the specified qubit by temporarily boosting the amplitude
 // of its main carrier tone to induce a strong transverse field pulse over a calibrated duration.
 // This evolves the state naturally via run_periods without touching phi directly.
@@ -795,10 +825,12 @@ void SpiralVM::logical_x_pulse(uint32_t qid, double duration_periods) {
     std::vector<int> saved_drive_index = drive_index;
     double original_amp = waveforms[wid].tones[carrier_idx].amp;
     
+
     // BOOST + ORBIT ALIGN (1 extra line!)
-    waveforms[wid].tones[carrier_idx].amp *= LOGICAL_X_AMPLITUDE * cos(current_period * M_PI/T);
-    waveforms[wid].tones[carrier_idx].phase += M_PI;  // LIVE ON SPIRAL!
-    waveforms[wid].tones[carrier_idx].amp = clamp_tone_amp(waveforms[wid].tones[carrier_idx].amp);
+    double quasi = is_ang ? (sin(omega * M_PI * current_period * T / T) + sin(2*omega * M_PI * current_period * T / T)) : 0.0;
+    waveforms[wid].tones[carrier_idx].amp *= LOGICAL_X_AMPLITUDE * cos(2.0 * current_period * M_PI/(512*T));
+    waveforms[wid].tones[carrier_idx].phase += M_PI * (quasi > 0 ? 1.0 : -1.0);
+    //waveforms[wid].tones[carrier_idx].amp = clamp_tone_amp(waveforms[wid].tones[carrier_idx].amp);
     std::cout << "[DEBUG] waveforms[wid].tones[carrier_idx].phase=" << waveforms[wid].tones[carrier_idx].phase << "\n";
 
     compile_to_physical_waveform();
@@ -860,7 +892,6 @@ double SpiralVM::measure_logical_Z_frame_corrected(uint32_t qid) const {
 }
 
 
-// In spiral_vm_core.cpp
 double SpiralVM::measure_logical_X(uint32_t qid) const {
     if (qid >= logical_qubits.size()) return 0.0;
     const LogicalQubit &q = logical_qubits[qid];
@@ -871,14 +902,17 @@ double SpiralVM::measure_logical_X(uint32_t qid) const {
         for (int col = q.center_x - R; col <= q.center_x + R; ++col) {
             if (col < 0 || col >= cols) continue;
             int i = row * cols + col;
-            // ⟨X⟩ ≈ 2 Re(⟨0|1⟩) per site, averaged over neighborhood with staggering
-            double sx = 2.0 * real(phi(i*D + 0, 0) * conj(phi(i*D + 1, 0)));
-            sum += ((row + col) % 2 == 0) ? sx : -sx;  // optional stagger if you want
+            // CORRECT ⟨X⟩ = P(1) - P(0)
+            double p0 = norm(phi(i*D + 0, 0));
+            double p1 = norm(phi(i*D + 1, 0));
+            double sx = p1 - p0;  // ⟨X⟩ per site
+            sum += ((row + col) % 2 == 0) ? sx : -sx;
             ++count;
         }
     }
     return (count > 0) ? sum / count : 0.0;
 }
+
 
 double SpiralVM::measure_logical_Y(uint32_t qid) const {
     if (qid >= logical_qubits.size()) return 0.0;

@@ -14,18 +14,31 @@
 
 // Minimal footprint Waveform/Tone types (kept public for test scripting)
 struct Tone {
-    double amp;      // amplitude (units of transverse field)
-    double freq;     // angular frequency (rad/s)
-    double phase;    // phase offset (rad)
-    double envelope_start; // relative to local period fraction [0..1]
-    double envelope_end;   // relative to local period fraction [0..1]
-    // simple linear/hann envelope flag could be added
-        int logical_id;   // -1 = global / background, otherwise qid
+    double amp;      
+    double freq;     
+    double phase;    
+    double I_component, Q_component;  // Vector components
+    double envelope_start; 
+    double envelope_end;   
+    int logical_id;   
 
-    Tone(double a=0,double f=0,double p=0,double s=0,double e=1.0,int q=-1)
-        : amp(a), freq(f), phase(p),
-          envelope_start(s), envelope_end(e),
+    // Updated Constructor
+    Tone(double a=0, double f=0, double p=0, double s=0, double e=1.0, int q=-1)
+        : amp(a), 
+          freq(f), 
+          phase(p),
+          I_component(a), // Default: I is the amplitude, Q is 0 (Pure X-axis)
+          Q_component(0.0),
+          envelope_start(s), 
+          envelope_end(e),
           logical_id(q) {}
+          
+    // Optional helper to set IQ directly
+    void set_iq(double i, double q) {
+        I_component = i;
+        Q_component = q;
+        amp = std::sqrt(i*i + q*q); // Keep amp synced for legacy code
+    }
 };
 
 
@@ -64,7 +77,7 @@ struct Gate {
 class SpiralVM {
 public:
     SpiralVM(int rows, int cols);  // constructor
-    double LOGICAL_X_AMPLITUDE = 1396999.7245;
+    double LOGICAL_X_AMPLITUDE = 10000;///1396999.7245;
     double PHASE_RAMP_MAGNITUDE = 0.5;
 
 
@@ -100,7 +113,7 @@ public:
     void apply_phase_shift(double angle);
     void apply_phase_kick_between(uint32_t qid1, uint32_t qid2, double strength, double duration_fraction);
     void apply_phase_kick_between_full(uint32_t qid1, uint32_t qid2, double strength, double duration_fraction);
-    double logical_zz_correlation(uint32_t qid1, uint32_t qid2);
+    double logical_zz_correlation(uint32_t qid1, uint32_t qid2) const;
     double get_logical_phase(uint32_t qid);
     double measure_logical_Z(uint32_t qid) const;
     double measure_logical_global_Z(uint32_t qid) const;
@@ -114,6 +127,7 @@ public:
     int find_waveform_index_for_qubit(uint32_t qid);
     void logical_x_pulse(uint32_t qid, double duration_periods);
     void logical_cz(uint32_t control, uint32_t target);
+    void logical_z_rotation(uint32_t qid, double angle);
     void logical_controlled_phase(uint32_t control, uint32_t target,
                                         double max_angle, double duration_periods);
 
@@ -122,6 +136,7 @@ public:
         const std::string& prefix = "waveform_",
                     int period = -1) const;               // -1 = current/latest
     void dump_h_eff(const std::string& fname_base, int period = -1) const;
+    size_t find_carrier_tone(int wid, uint32_t qid) const;
 
     // Helper to sample a waveform over one period
     void sample_waveform(const Waveform& w, double t_start, double dt, arma::vec& times, arma::cx_vec& iq, arma::vec& amps, arma::vec& phases) const;
@@ -141,6 +156,8 @@ public:
     // Add these 2 methods
     void virtual_phase_gate(uint32_t qid, double angle);  // Virtual T/Z: NO decoherence
     double measure_logical_Z_frame_corrected(uint32_t qid) const;  // Applies virtual compensation
+    int get_total_logical_qubits();
+    size_t find_carrier_tone(int wid, uint32_t qid);
 
 private:
     // internal state

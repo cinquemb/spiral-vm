@@ -24,9 +24,7 @@ int main() {
     for(int cycle = 0; cycle < 50000; cycle++) {
         double z_before = Z(q0);
         
-        vm.logical_x_pulse(q0, 1);  // Uses vm.LOGICAL_X_AMPLITUDE/2
-        //vm.logical_phase_ramp(q0, 2.0*M_PI, 1);
-        //vm.logical_x_pulse(q0, 1);  // Uses vm.LOGICAL_X_AMPLITUDE/2
+        vm.logical_x_pulse(q0, 1);
         
         double z_after = Z(q0);
         double flip_fidelity = std::abs(z_before * z_after);

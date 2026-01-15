@@ -1,43 +1,50 @@
 // examples/bell_state.cpp
-// Creates |00⟩ₗ + |11⟩ₗ using spiral phase kick between two logical qubits
+// Creates (|00⟩ₗ + |11⟩ₗ)/√2 Bell state using DTC universal gates
 #include "../src/spiral_vm_core.hpp"
 #include <iostream>
+#include <iomanip>
 
 int main() {
     SpiralVM vm(30, 30);
     vm.is_ang = true;
-    //vm.initialize_state("polarized");
-    //vm.initialize_state("neel");
     vm.initialize_state("neel");
 
-    uint32_t q0 = vm.add_qubit(12, 15);
-    uint32_t q1 = vm.add_qubit(13, 15);    // two neighboring spirals
+    uint32_t q0 = vm.add_qubit(12,15);
+    uint32_t q1 = vm.add_qubit(15,15);  // farther apart to reduce overlap crosstalk (have to stay more than 2 way if sharing 1 dim index) TODO: NEED TO TUNE SIDE BANDS LATER
 
-    vm.compile_to_physical_waveform();  // Now only 1 waveform, broadcast to all
-    vm.dump_frequency_mapping();// dump mapping
+    vm.run_periods(5);  // short stabilization
+    vm.compile_to_physical_waveform();
 
-    vm.run_periods(20);
+    auto Z0 = [&vm]() { return vm.measure_logical_Z(0); };
+    auto Z1 = [&vm]() { return vm.measure_logical_Z(1); };
+    auto ZZ = [&vm]() { return vm.logical_zz_correlation(0,1); };
 
-     // MEASURE INITIAL: Both |0⟩ₗ (Néel even sites)
-    std::cout << "Pre-CZ: Z0=" << vm.measure_logical_Z(q0) 
-              << " Z1=" << vm.measure_logical_Z(q1) << "\n";
+    std::cout << std::fixed << std::setprecision(6);
+    std::cout << "Initial: Z0=" << Z0() << ", Z1=" << Z1() << ", ZZ=" << ZZ() << "\n";
 
 
-    // Logical Hadamard on q0
-    vm.logical_phase_ramp(q0, M_PI/2.0, 1);  // Z(π/2) over 20 steps
-    vm.global_pi_pulse();  // X
-    vm.logical_phase_ramp(q0, -M_PI/2.0, 1);  // Z(-π/2)
+    vm.run_periods(5);
 
-    // Logical CZ via short phase-gradient kick between spirals
-    vm.apply_phase_kick_between(q0, q1, 0.25, 0.15*vm.T);  // strength & duration
+    // Standard Bell prep: H on q1 → CZ → X on q0
+    vm.logical_hadamard(q0);       // |+⟩ on q1, |0⟩ on q0
+    vm.run_periods(3);
 
-    vm.run_periods(10);
+    //vm.logical_cz(q0, q1);      // CZ (controlled from q0, target q1)
+    vm.apply_phase_kick_between_full(q0,  q1,
+                                             vm.LOGICAL_X_AMPLITUDE, 20); 
+    vm.run_periods(3);
 
-    // MEASURE FINAL: Perfect anticorrelation = Bell state
-    std::cout << "Post-CZ: Z0=" << vm.measure_logical_Z(q0) 
-              << " Z1=" << vm.measure_logical_Z(q1) << "\n";
-    std::cout << "ZZ corr=" << vm.logical_zz_correlation(q0, q1) 
-              << " (1.0 = perfect |00⟩+|11⟩)\n";
+
+
+    std::cout << "After Bell prep:\n";
+    std::cout << "  Z0 = " << Z0() << "\n";
+    std::cout << "  Z1 = " << Z1() << "\n";
+    std::cout << "  ZZ = " << ZZ() << " (should be negative, ~ -1 for Bell)\n";
+
+    // Optional: flip q0 again and check anti-correlation persists
+    vm.logical_x_pulse(q0, 1.0);
+    vm.run_periods(3);
+    std::cout << "After extra X on q0: Z0=" << Z0() << ", Z1=" << Z1() << ", ZZ=" << ZZ() << "\n";
 
     return 0;
 }

@@ -62,9 +62,12 @@ int main() {
     std::cout << "Before H: ⟨Z_L⟩ = " << Z_test(q0) << ", ⟨X_L⟩ = " << X_test(q0) << "\n";
     
     // PERFECT Hadamard using calibrated slope
-    vm_test.logical_phase_ramp(q0,  best_z_slope*M_PI, 1);  // Z(+π/2)
-    vm_test.logical_x_pulse(q0, 1);                    // X
-    vm_test.logical_phase_ramp(q0, -best_z_slope*M_PI, 1);  // Z(-π/2)
+
+    vm_test.logical_z_rotation(q0, M_PI/2.0);    // Rz(π/2)
+    vm_test.logical_x_pulse(q0, 1.0);            // Rx(π)  
+    vm_test.logical_z_rotation(q0, -M_PI/2.0);   // Rz(-π/2)
+
+
     
     std::cout << "After H:  ⟨Z_L⟩ = " << Z_test(q0) << ", ⟨X_L⟩ = " << X_test(q0) << "\n";
     std::cout << "Expected: Z≈0.0, X≈+1.0\n";

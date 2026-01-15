@@ -18,8 +18,7 @@ int main() {
     std::cout << std::fixed << std::setprecision(6);
     std::cout << "Before Z(π/2)   → ⟨Z_L⟩ = " << Z(q0) << "\n";
 
-    vm.logical_phase_ramp(q0, M_PI / 2.0, 1);   // apply Z(π/2)
-    vm.run_periods(1);                          // let it settle
+    vm.logical_z_rotation(q0, M_PI/2.0);
 
     std::cout << "After Z(π/2)    → ⟨Z_L⟩ = " << Z(q0) << "\n";
 

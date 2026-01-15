@@ -272,19 +272,26 @@ void SpiralVM::lowpass_filter_waveform(Waveform &w, double cutoff_factor) {
 }
 
 // evaluate waveform with optional local envelope-handling (period fraction ignored for now)
-double SpiralVM::eval_waveform_with_envelope(const Waveform &w, double t, double local_phase) const {
-    double I_total = 0.0, Q_total = 0.0;
-    
-    for (const auto &tn : w.tones) {
-        double arg = tn.freq * t + tn.phase + local_phase;
-        // IQ MODULATION → full XY control!
-        I_total += tn.I_component * cos(arg) - tn.Q_component * sin(arg);
-        Q_total += tn.I_component * sin(arg) + tn.Q_component * cos(arg);
-    }
-    
-    return sqrt(I_total*I_total + Q_total*Q_total);  // Vector Rabi drive
-}
+double SpiralVM::eval_waveform_with_envelope(const Waveform &w,
+                                             double t,
+                                             double local_phase) const {
+    double physical_field = 0.0;
 
+    for (const auto &tn : w.tones) {
+        // The phase argument includes frequency, fixed phase, and the Floquet local phase
+        double arg = tn.freq * t + tn.phase + local_phase;
+
+        // I and Q are the quadrature amplitudes
+        double I = tn.amp * tn.I_component;
+        double Q = tn.amp * tn.Q_component;
+
+        // This is the standard IQ modulation formula
+        // It produces the actual oscillating wave required for resonance
+        physical_field += I * std::cos(arg) - Q * std::sin(arg);
+    }
+
+    return physical_field;
+}
 
 // ---------- Add logical qubit ----------
 uint32_t SpiralVM::add_qubit(uint32_t x, uint32_t y) {
@@ -293,6 +300,8 @@ uint32_t SpiralVM::add_qubit(uint32_t x, uint32_t y) {
     q.center_y = y;
     q.base_phase = 0.0;
     logical_qubits.push_back(q);
+    logical_phase.push_back(0.0);
+
     uint32_t qid = logical_qubits.size() - 1;
 
     // allocate waveform and attach to physical sites in radius R
@@ -671,29 +680,38 @@ void SpiralVM::step_period(int n, double &delta_F) {
     for (int k = 0; k < steps; k++) {
         double t = n * T + k * dt;
 
-        // local field per qubit
+        // local field per qubit, phase-aware
         std::vector<double> local_hx(N, 0.0);
+
         for (int i = 0; i < N; ++i) {
             int wid = drive_index[i];
 
-            // compute physical coordinates
-            int x = i % cols;
-            int y = i / cols;
+            double phase_offset = drive_phase; // default
 
-            if (wid == -2) {
-                // use physical_waveform (flag set by compile_to_physical_waveform)
-                double val = eval_waveform_with_envelope(physical_waveform, t, drive_phase);
-                local_hx[i] = h0 + val;
-            } else if (wid < 0 || wid >= (int)waveforms.size()) {
-                // simple oscillation using scattered frequency
-                local_hx[i] = h0 + h1 * cos(qubit_freqs[i] * t + M_PI/4.0 + drive_phase);
-            } else {
-                // logical waveform
-                double val = eval_waveform_with_envelope(waveforms[wid], t, drive_phase);
-                local_hx[i] = h0 + val;
+            if (wid >= 0 && wid < (int)waveforms.size()) {
+                // look for tone assigned to this qubit
+                for (auto &tn : waveforms[wid].tones) {
+                    if (tn.freq == allocated_carriers[i] && tn.logical_id >= 0) {
+                        phase_offset = logical_phase[tn.logical_id];
+                        break;
+                    }
+                }
             }
 
+            double val = 0.0;
+            if (wid == -2) {
+                val = eval_waveform_with_envelope(physical_waveform, t, phase_offset);
+            } else if (wid < 0 || wid >= (int)waveforms.size()) {
+                val = h1 * cos(qubit_freqs[i]*t + M_PI/4.0 + phase_offset);
+            } else {
+                val = eval_waveform_with_envelope(waveforms[wid], t, phase_offset);
+            }
+
+            local_hx[i] = h0 + val;
         }
+
+
+
 
         // angular modulation
         double angular_freq_quasi = is_ang ? (sin(omega * M_PI * t / T) + sin(2*omega * M_PI * t / T)) : 0.0;
@@ -748,8 +766,18 @@ int SpiralVM::get_total_logical_qubits(){
     return logical_qubits.size();
 }
 
+
 // ---------- run N periods ----------------
 void SpiralVM::run_periods(uint32_t N_periods) {
+    double dt = N_periods * T;   // physical time advanced
+
+    for (size_t q = 0; q < logical_phase.size(); ++q) {
+        logical_phase[q] = std::fmod(
+            logical_phase[q] + allocated_carriers[q] * dt,
+            2.0 * M_PI
+        );
+    }
+
     double dummy_deltaF = 0.0;
     for (uint32_t i = 0; i < N_periods; i++) {
         step_period(current_period, dummy_deltaF);
@@ -759,58 +787,95 @@ void SpiralVM::run_periods(uint32_t N_periods) {
 // ---------- logical measurements and gates ----------
 
 
-// logical Hadamard on single qubit
-void SpiralVM::logical_hadamard(uint32_t qid) {
+void SpiralVM::logical_hadamard_tune(uint32_t qid) {
     int wid = logical_qubits[qid].waveform_id;
-    
-    // INLINE SEARCH - no new function needed
     size_t carrier_idx = 0;
+    
+    // Find carrier
     for (size_t i = 0; i < waveforms[wid].tones.size(); ++i) {
         if (waveforms[wid].tones[i].logical_id == static_cast<int>(qid)) {
+            carrier_idx = i; break;
+        }
+    }
+    
+    double best_x = 0.0;
+    double best_amp = 0.0, best_q = 0.0;
+    
+    // GRID SEARCH: amp, Q-phase
+    for (double amp = 60; amp <= 130; amp += 5) {
+        for (double q_phase = 0.5; q_phase <= 1.5; q_phase += 0.1) {
+            // SAVE STATE
+            double saved_i = waveforms[wid].tones[carrier_idx].I_component;
+            double saved_q = waveforms[wid].tones[carrier_idx].Q_component;
+            
+            // TEST H
+            waveforms[wid].tones[carrier_idx].set_iq(amp, amp * q_phase);
+            compile_to_physical_waveform();
+            run_periods(1.0);
+            
+            double x_meas = measure_logical_X(qid);
+            printf("amp=%.1f q=%.2f → X=%.4f\n", amp, q_phase, x_meas);
+            
+            if (x_meas > best_x) {
+                best_x = x_meas; best_amp = amp; best_q = q_phase;
+            }
+            
+            // RESTORE
+            waveforms[wid].tones[carrier_idx].set_iq(saved_i, saved_q);
+            compile_to_physical_waveform();
+        }
+    }
+    
+    printf("*** BEST HADAMARD: amp=%.1f q=%.2f → X=%.4f ***\n", 
+           best_amp, best_q, best_x);
+}
+
+
+// logical Hadamard on single qubit
+void SpiralVM::logical_hadamard(uint32_t qid) {
+    // --- 1. Get the current orbit phase of this logical qubit
+    double phi = current_orbit_phase(qid);
+
+    // --- 2. Set the desired Hadamard rotation in IQ space
+    // Hadamard: π rotation around (X+Z)/√2
+    double base_amp = 161.1 / std::sqrt(2.0); // calibrated amplitude
+
+    // Align IQ to the logical orbit phase
+    // Maps Z→X rotation properly along the current orbit
+    double i_aligned = base_amp * std::cos(phi + M_PI/4.0);
+    double q_aligned = base_amp * std::sin(phi + M_PI/4.0);
+
+    // --- 3. Find the carrier tone for this logical qubit
+    int wid = logical_qubits[qid].waveform_id;
+    if (wid < 0 || wid >= (int)waveforms.size()) return;
+
+    size_t carrier_idx = static_cast<size_t>(-1);
+    for (size_t i = 0; i < waveforms[wid].tones.size(); ++i) {
+        Tone &tn = waveforms[wid].tones[i];
+        if (tn.logical_id == static_cast<int>(qid) &&
+            std::abs(tn.freq - allocated_carriers[qid]) < 1e-6) {
             carrier_idx = i;
             break;
         }
     }
-    
-    double h_amp = h1 / sqrt(2.0);
-    waveforms[wid].tones[carrier_idx].set_iq(h_amp, h_amp);
-    
+    if (carrier_idx == static_cast<size_t>(-1)) return;
+
+    // --- 4. Set the IQ of the tone along the logical orbit
+    waveforms[wid].tones[carrier_idx].set_iq(i_aligned, q_aligned);
+
+    // --- 5. Push to physical waveform and evolve one period
     compile_to_physical_waveform();
     run_periods(1.0);
-    
-    waveforms[wid].tones[carrier_idx].set_iq(h1, 0.0);
-    compile_to_physical_waveform();
+
+    // --- 6. Update logical_phase to track Hadamard rotation (π/2 along X+Z)
+    logical_phase[qid] = std::fmod(logical_phase[qid] + M_PI/2.0, 2.0*M_PI);
 }
 
 
 
 double SpiralVM::current_orbit_phase(uint32_t qid) const {
-    if (qid >= logical_qubits.size()) return 0.0;
-
-    int wid = logical_qubits[qid].waveform_id;
-    if (wid < 0 || wid >= (int)waveforms.size()) return 0.0;
-
-    // Find the main carrier tone for this qubit
-    for (const auto& tn : waveforms[wid].tones) {
-        if (tn.logical_id == static_cast<int>(qid) &&
-            std::abs(tn.freq - allocated_carriers[qid]) < 1e-6) {
-
-            // Base phase of the tone
-            double tone_phase = tn.phase;
-
-            // Add accumulated phase from frequency over time
-            double accumulated = tn.freq * (current_period * T);
-
-            // Subtract global drive phase (so it's relative to the global modulation frame)
-            double relative_phase = tone_phase + accumulated - drive_phase;
-
-            // Normalize to [0, 2π)
-            return fmod(relative_phase, 2.0 * M_PI);
-        }
-    }
-
-    // Fallback: use global drive phase only
-    return fmod(-drive_phase, 2.0 * M_PI);
+    if (qid >= logical_phase.size()) return 0.0;
+    return std::fmod(logical_phase[qid], 2.0 * M_PI);
 }
 
 
@@ -887,6 +952,11 @@ void SpiralVM::logical_x_pulse(uint32_t qid, double duration_periods) {
 
 }
 
+void SpiralVM::logical_Z(uint32_t qid, double angle) {
+    if (qid >= logical_phase.size()) return;
+    logical_phase[qid] = std::fmod(logical_phase[qid] + angle, 2.0 * M_PI);
+}
+
 double SpiralVM::measure_logical_Z(uint32_t qid) const {
     if (qid >= logical_qubits.size()) return 0.0;
     const LogicalQubit &q = logical_qubits[qid];
@@ -920,30 +990,35 @@ double SpiralVM::measure_logical_Z_frame_corrected(uint32_t qid) const {
     return physical_z;
 }
 
-
 double SpiralVM::measure_logical_X(uint32_t qid) const {
     if (qid >= logical_qubits.size()) return 0.0;
     const LogicalQubit &q = logical_qubits[qid];
-    double re = 0.0;
+    double total_x = 0.0;
     int count = 0;
     
     for (int row = q.center_y - R; row <= q.center_y + R; ++row) {
         if (row < 0 || row >= rows) continue;
         for (int col = q.center_x - R; col <= q.center_x + R; ++col) {
             if (col < 0 || col >= cols) continue;
+            
             int i = row * cols + col;
+            std::complex<double> psi0 = phi(i * D + 0, 0);
+            std::complex<double> psi1 = phi(i * D + 1, 0);
             
-            // **CORRECT ⟨X⟩ = Re[ψ₀* ψ₁ + ψ₁* ψ₀]**
-            cx_double psi0 = phi(i*D + 0, 0);
-            cx_double psi1 = phi(i*D + 1, 0);
-            re += std::real( std::conj(psi0)*psi1 + std::conj(psi1)*psi0 );
+            // Standard ⟨X⟩ coherence term
+            double site_x = 2.0 * std::real(std::conj(psi0) * psi1);
             
-            // Staggered sign for Néel state
-            if ((row + col) % 2 == 1) re = -re;
+            // CORRECT Staggered sign: flip site_x locally for Néel order
+            if ((row + col) % 2 == 1) {
+                total_x -= site_x;
+            } else {
+                total_x += site_x;
+            }
             ++count;
         }
     }
-    return (count > 0) ? re / count : 0.0;
+    // Average across the neighborhood to get the logical value
+    return (count > 0) ? total_x / count : 0.0;
 }
 
 
@@ -966,20 +1041,15 @@ double SpiralVM::measure_logical_Y(uint32_t qid) const {
     return (count > 0) ? sum / count : 0.0;
 }
 
-void SpiralVM::logical_phase_ramp(int target_qid, double slope, int steps) {
+void SpiralVM::logical_phase_ramp(int target_qid, double angle, int steps) {
+    double dphi = angle / steps;
     for (int k = 0; k < steps; ++k) {
-        for (auto &w : waveforms) {
-            for (auto &tn : w.tones) {
-                if (tn.logical_id == target_qid) {
-                    tn.phase += slope;
-                }
-            }
-        }
-
-        compile_to_physical_waveform();  // rebuild merged drive
-        run_periods(1);                  // let it act on φ
+        logical_Z(target_qid, dphi);
+        run_periods(1);
     }
 }
+
+
 
 
 double SpiralVM::get_logical_phase(uint32_t qid) {
@@ -999,12 +1069,9 @@ double SpiralVM::get_logical_phase(uint32_t qid) {
 }
 
 void SpiralVM::logical_z_rotation(uint32_t qid, double angle) {
-    if (qid >= logical_qubits.size()) return;
-    
     int wid = logical_qubits[qid].waveform_id;
-    if (wid < 0 || wid >= (int)waveforms.size()) return;
     
-    // Find carrier tone (like your X pulse)
+    // YOUR CARRIER SEARCH (perfect!)
     size_t carrier_idx = -1;
     for (size_t i = 0; i < waveforms[wid].tones.size(); ++i) {
         if (waveforms[wid].tones[i].logical_id == (int)qid &&
@@ -1015,29 +1082,19 @@ void SpiralVM::logical_z_rotation(uint32_t qid, double angle) {
     }
     if (carrier_idx == static_cast<size_t>(-1)) return;
 
-    // SAVE STATE
-    std::vector<int> saved_drive_index = drive_index;
-    double original_freq = waveforms[wid].tones[carrier_idx].freq;
-    double original_phase = waveforms[wid].tones[carrier_idx].phase;
+    // SAVE/RESTORE
+    double saved_freq = waveforms[wid].tones[carrier_idx].freq;
     
-    // **Z FIELD = CARRIER DETUNING** (orthogonal to X drive)
-    waveforms[wid].tones[carrier_idx].amp /=  0.389 * M_PI * angle * sin(angle);//cos(current_period * angle / T) * sin(current_period * angle / T);;// * angle;  // detuning!
-    waveforms[wid].tones[carrier_idx].phase -= M_PI/2 * LOGICAL_X_AMPLITUDE;
+    // Z = DETUNING (NOT amplitude!)
+    waveforms[wid].tones[carrier_idx].freq += angle / (2.0 * M_PI);  // θ/T detuning
+    waveforms[wid].tones[carrier_idx].set_iq(10.0, 0.0);  // WEAK X-drive
     
     compile_to_physical_waveform();
+    run_periods(1.0);
     
-    // **EVOLVE under pure Z Hamiltonian**
-    bool saved_auto = auto_compile_enabled;
-    auto_compile_enabled = false;
-    std::vector<int> pulse_drive_index = drive_index;
-    
-    run_periods(1);  // 1 period Z evolution
-    
-    // RESTORE
-    drive_index = saved_drive_index;
-    waveforms[wid].tones[carrier_idx].freq = original_freq;
-    waveforms[wid].tones[carrier_idx].phase = original_phase;
-    auto_compile_enabled = saved_auto;
+    // RESTORE PERFECT X
+    waveforms[wid].tones[carrier_idx].freq = saved_freq;
+    waveforms[wid].tones[carrier_idx].set_iq(LOGICAL_X_AMPLITUDE, 0.0);
     compile_to_physical_waveform();
 }
 

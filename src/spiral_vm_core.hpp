@@ -17,27 +17,33 @@ struct Tone {
     double amp;      
     double freq;     
     double phase;    
-    double I_component, Q_component;  // Vector components
+    double I_component, Q_component; 
     double envelope_start; 
     double envelope_end;   
     int logical_id;   
 
-    // Updated Constructor
+    // Standard Constructor: Maps 'a' to 'amp' and 'I' for legacy compatibility
     Tone(double a=0, double f=0, double p=0, double s=0, double e=1.0, int q=-1)
-        : amp(a), 
-          freq(f), 
-          phase(p),
-          I_component(a), // Default: I is the amplitude, Q is 0 (Pure X-axis)
-          Q_component(0.0),
-          envelope_start(s), 
-          envelope_end(e),
+        : amp(a), freq(f), phase(p),
+          I_component(a), Q_component(0.0), // Defaults to pure I-drive
+          envelope_start(s), envelope_end(e),
           logical_id(q) {}
           
-    // Optional helper to set IQ directly
+    // Direct IQ Helper: Use this for Hadamard and CZ gates
     void set_iq(double i, double q) {
         I_component = i;
         Q_component = q;
-        amp = std::sqrt(i*i + q*q); // Keep amp synced for legacy code
+        // In 2026 physical drivers, 'amp' is often used as the DAC limit
+        amp = std::sqrt(i*i + q*q); 
+    }
+
+    // Normalizes components so sqrt(I^2 + Q^2) = 1.0, keeping 'amp' as the master gain
+    void normalize_iq() {
+        double mag = std::sqrt(I_component*I_component + Q_component*Q_component);
+        if (mag > 1e-9) {
+            I_component /= mag;
+            Q_component /= mag;
+        }
     }
 };
 
@@ -119,6 +125,7 @@ public:
     double measure_logical_global_Z(uint32_t qid) const;
     double measure_logical_X(uint32_t qid) const;
     double measure_logical_Y(uint32_t qid) const;
+    void logical_Z(uint32_t qid, double angle);
     void ramp_omega_ang(double start, double end, double duration_seconds);
     void global_pi_pulse();
     void logical_hadamard(uint32_t qid);
@@ -128,6 +135,7 @@ public:
     void logical_x_pulse(uint32_t qid, double duration_periods);
     void logical_cz(uint32_t control, uint32_t target);
     void logical_z_rotation(uint32_t qid, double angle);
+    void logical_hadamard_tune(uint32_t);
     void logical_controlled_phase(uint32_t control, uint32_t target,
                                         double max_angle, double duration_periods);
 
@@ -158,6 +166,15 @@ public:
     double measure_logical_Z_frame_corrected(uint32_t qid) const;  // Applies virtual compensation
     int get_total_logical_qubits();
     size_t find_carrier_tone(int wid, uint32_t qid);
+    double current_orbit_phase(uint32_t qid) const;
+
+
+    std::vector<LogicalQubit> logical_qubits;  // Logical qubit list
+    std::vector<Waveform> waveforms;       // global waveform bank
+
+    // Frequency allocation bookkeeping
+    std::vector<double> allocated_carriers;
+    std::vector<double> logical_phase;  // size = num logical qubits
 
 private:
     // internal state
@@ -167,13 +184,13 @@ private:
     bool auto_compile_enabled = true;  // member variable
 
 
+
     arma::cx_mat phi;                  // Quantum state vector (2*N x 1)
     arma::cx_mat phi_in;               // Initial state for fidelity measurement
     int steps;                   // RK4 steps per period
     int current_period;          // Tracks Floquet periods elapsed
     double sx_gain;              // h1 gain parameter
 
-    std::vector<LogicalQubit> logical_qubits;  // Logical qubit list
 
     // Mapping physical qubits to logical qubits (allows many logicals per physical)
     std::vector<std::vector<uint32_t>> phys_to_logicals;
@@ -187,7 +204,6 @@ private:
     std::vector<double> fidelity_window;
 
     // Waveform engine (bank + mapping)
-    std::vector<Waveform> waveforms;       // global waveform bank
     Waveform physical_waveform;               // index 0 only: merged physical;
     std::vector<int> drive_index;          // size N, drive_index[i] = waveform ID
 
@@ -195,8 +211,6 @@ private:
     std::vector<double> virtual_frame_phase;  // VIRTUAL Z: infinite T2 bookkeeping
 
 
-    // Frequency allocation bookkeeping
-    std::vector<double> allocated_carriers;
 
     // Private methods: physics calculations, Floquet step
     void step_period(int n, double& delta_F);
@@ -223,7 +237,6 @@ private:
     int get_down_neighbor(int row, int col) const;
 
     double compute_avg_stabilizer(const arma::cx_mat& phi);
-    double current_orbit_phase(uint32_t qid) const;
 
     // Safety helpers
     double clamp_tone_amp(double a) const;

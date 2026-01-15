@@ -77,7 +77,7 @@ struct Gate {
 class SpiralVM {
 public:
     SpiralVM(int rows, int cols);  // constructor
-    double LOGICAL_X_AMPLITUDE = 10000;///1396999.7245;
+    double LOGICAL_X_AMPLITUDE = 125;///1396999.7245;
     double PHASE_RAMP_MAGNITUDE = 0.5;
 
 

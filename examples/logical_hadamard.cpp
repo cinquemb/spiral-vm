@@ -1,20 +1,12 @@
-// examples/logical_hadamard_phaseaware_test.cpp
-// Phase-aware Hadamard tester using orbit phase
-
+// ---------- PHASE-BOMB EXPERIMENT ----------
 #include "../src/spiral_vm_core.hpp"
 #include <iostream>
 #include <iomanip>
-#include <vector>
 #include <cmath>
+#include <vector>
+#include <random>
 
-struct ZCalResult {
-    double slope;
-    double X;
-    double Z;
-};
-
-// Phase-aware Z calibration
-ZCalResult test_z_slope(double slope) {
+int main() {
     SpiralVM vm(30, 30);
     vm.initialize_state("neel");
     uint32_t q0 = vm.add_qubit(15, 15);
@@ -22,97 +14,51 @@ ZCalResult test_z_slope(double slope) {
     auto Z = [&vm](uint32_t id){ return vm.measure_logical_Z(id); };
     auto X = [&vm](uint32_t id){ return vm.measure_logical_X(id); };
 
-    // Prepare |0>_L
+    // Start in |0>_L
     vm.logical_x_pulse(q0, 1);
     vm.logical_x_pulse(q0, 1);
 
-    double phi0 = vm.current_orbit_phase(q0);
+    const int N_steps = 50;
+    const double H_base = 0.2;     // tiny Hadamard step amplitude
+    const double Z_kick_max = 0.05; // small random Z kick
 
-    // Apply Z rotation in small increments
-    int steps = 100;
-    double dphi = slope * M_PI / steps;
-    for(int s=0; s<steps; ++s)
-        vm.logical_phase_ramp(q0, dphi, 1);
+    std::mt19937 rng(1234);
+    std::uniform_real_distribution<double> dist(-Z_kick_max, Z_kick_max);
 
-    double phi1 = vm.current_orbit_phase(q0);
+    std::cout << std::fixed << std::setprecision(6);
+    std::cout << "Step |    φ    |    Z    |    X    | Δφ(H) | Δφ(Z)\n";
+    std::cout << "---------------------------------------------------------\n";
 
-    std::cout << "    phase: " << phi0
-              << " -> " << phi1
-              << "  Δφ=" << (phi1 - phi0) << "\n";
+    for (int step = 0; step < N_steps; ++step) {
+        double phi_before = vm.current_orbit_phase(q0);
+        double Z_before = Z(q0);
+        double X_before = X(q0);
 
-    return {slope, X(q0), Z(q0)};
-}
+        // --- 1. Small misaligned Hadamard step ---
+        double i0 = H_base * (0.5 + 0.5 * std::sin(phi_before));
+        double q0_amp = H_base * (0.5 + 0.5 * std::cos(phi_before));
+        vm.logical_hadamard_step(q0, i0, q0_amp); // new step-wise H
 
-int main() {
-    std::cout << std::fixed << std::setprecision(9);
+        double phi_after_H = vm.current_orbit_phase(q0);
 
-    // --- Step 1: Z calibration ---
-    std::cout << "=== Z ROTATION CALIBRATION ===\n";
-    std::vector<double> z_slopes = {1.0, 10.0, 100.0, 500.0, 1000.0,
-                                    2000.0, 3500.0, 5000.0, 7500.0, 10000.0};
-    double best_slope = 0.0;
-    double best_err = 1e9;
+        // --- 2. Random small Z kick ---
+        double z_kick = dist(rng);
+        vm.logical_phase_ramp(q0, z_kick, 1);   // promote to logical_phase
+        double phi_after_Z = vm.current_orbit_phase(q0);
 
-    for(double s : z_slopes) {
-        auto r = test_z_slope(s);
-        double err = std::abs(r.X); // target X≈0
-        std::cout << "Z(slope=" << std::setw(7) << s
-                  << ")  X=" << std::setw(12) << r.X
-                  << "  Z=" << std::setw(12) << r.Z
-                  << "  |X|=" << err << "\n";
+        // --- 3. Record ---
+        double Z_after = Z(q0);
+        double X_after = X(q0);
 
-        if(err < best_err) {
-            best_err = err;
-            best_slope = s;
-        }
-    }
-    std::cout << "\n*** BEST Z90 SLOPE = " << best_slope
-              << " (|X|=" << best_err << ") ***\n\n";
-
-    // --- Step 2: Hadamard test ---
-    std::cout << "=== PHASE-AWARE HADAMARD TEST ===\n";
-    std::cout << "Trial |    φ0    |    Z0    |    X0    |    Z1    |    X1    |    φ1\n";
-    std::cout << "-----------------------------------------------------------------------\n";
-
-    for(int trial=0; trial<5; ++trial) {
-        SpiralVM vm(30, 30);
-        vm.initialize_state("neel");
-        uint32_t q0 = vm.add_qubit(15, 15);
-
-        auto Z = [&vm](uint32_t id){ return vm.measure_logical_Z(id); };
-        auto X = [&vm](uint32_t id){ return vm.measure_logical_X(id); };
-
-        // Prepare |0>_L
-        vm.logical_x_pulse(q0, 1);
-        vm.logical_x_pulse(q0, 1);
-
-        // Start at a different logical orbit phase
-        double random_phi = (trial * M_PI)/3.0;
-        int steps = 50;
-        double dphi = random_phi / steps;
-        for(int s=0; s<steps; ++s)
-            vm.logical_phase_ramp(q0, dphi, 1);
-
-        double phi0 = vm.current_orbit_phase(q0);
-        double Z0 = Z(q0);
-        double X0 = X(q0);
-
-        vm.logical_hadamard(q0);
-
-        double phi1 = vm.current_orbit_phase(q0);
-        double Z1 = Z(q0);
-        double X1 = X(q0);
-
-        std::cout << std::setw(5) << trial << " | "
-                  << std::setw(8) << phi0 << " | "
-                  << std::setw(8) << Z0   << " | "
-                  << std::setw(8) << X0   << " | "
-                  << std::setw(8) << Z1   << " | "
-                  << std::setw(8) << X1   << " | "
-                  << std::setw(8) << phi1 << "\n";
+        std::cout << std::setw(4) << step
+                  << " | " << std::setw(8) << phi_before
+                  << " | " << std::setw(8) << Z_before
+                  << " | " << std::setw(8) << X_before
+                  << " | " << std::setw(8) << (phi_after_H - phi_before)
+                  << " | " << std::setw(8) << (phi_after_Z - phi_after_H)
+                  << "\n";
     }
 
-    std::cout << "\nExpected after H: Z≈0, X≈+1 (independent of φ)\n";
-
+    std::cout << "\nObserve: X now grows as the logical orbit is phase-bombed.\n";
     return 0;
 }

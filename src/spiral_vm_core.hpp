@@ -71,7 +71,7 @@ struct LogicalQubit {
 };
 
 struct Gate {
-    enum Type { X, Z, CZ, H, T, RZ, RX, RY, CNOT, PHASE, MEASURE };
+    enum Type { X, Y, Z, CZ, H, T, RZ, RX, RY, CNOT, PHASE, MEASURE };
     Type type;
     uint32_t target;
     uint32_t control;  // only for CZ
@@ -128,11 +128,12 @@ public:
     void logical_Z(uint32_t qid, double angle);
     void ramp_omega_ang(double start, double end, double duration_seconds);
     void global_pi_pulse();
-    void logical_hadamard(uint32_t qid);
+    void logical_hadamard(uint32_t qid, int N_steps = 8, double H_amp = 0.2);
     void apply_T_gate(uint32_t qid, int steps);
     double get_logical_phase_frame_corrected(uint32_t qid);
     int find_waveform_index_for_qubit(uint32_t qid);
     void logical_x_pulse(uint32_t qid, double duration_periods);
+    void logical_y_pulse(uint32_t qid, double duration_periods);
     void logical_cz(uint32_t control, uint32_t target);
     void logical_z_rotation(uint32_t qid, double angle);
     void logical_hadamard_tune(uint32_t);
@@ -167,7 +168,7 @@ public:
     int get_total_logical_qubits();
     size_t find_carrier_tone(int wid, uint32_t qid);
     double current_orbit_phase(uint32_t qid) const;
-
+    void logical_hadamard_step(uint32_t qid, double H_amp = 0.2);
 
     std::vector<LogicalQubit> logical_qubits;  // Logical qubit list
     std::vector<Waveform> waveforms;       // global waveform bank

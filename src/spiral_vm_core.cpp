@@ -464,8 +464,13 @@ void SpiralVM::apply_gate(const Gate& g, double period_time) {
 
         case Gate::X: {
             // Goal: logical X on target qubit → should become a π-pulse on that logical qubit only
-            // Current: global_pi_pulse() flips EVERY physical site → we want to avoid this
             logical_x_pulse(g.target, period_time);
+            break;
+        }
+
+    case Gate::Y: {
+            // Goal: logical Y on target qubit → should become a π-pulse with +π/2 quadrature shift. on that logical qubit only
+            logical_y_pulse(g.target, period_time);
             break;
         }
 
@@ -831,45 +836,83 @@ void SpiralVM::logical_hadamard_tune(uint32_t qid) {
 }
 
 
-// logical Hadamard on single qubit
-void SpiralVM::logical_hadamard(uint32_t qid) {
-    // --- 1. Get the current orbit phase of this logical qubit
+// --------------------------------------------------------
+// Full logical Hadamard using multiple incremental steps
+// Phase-covariant, builds X properly
+// --------------------------------------------------------
+void SpiralVM::logical_hadamard(uint32_t qid, int N_steps, double H_amp) {
+    if (qid >= logical_qubits.size()) return;
+
+    for (int step = 0; step < N_steps; ++step) {
+        // 1. Current logical orbit phase
+        double phi = current_orbit_phase(qid);
+
+        // 2. Compute incremental IQ aligned to phase
+        double i0 = H_amp * std::cos(phi + M_PI/4);  // offset to approximate π/2 rotation
+        double q0 = H_amp * std::sin(phi + M_PI/4);
+
+        // 3. Find carrier tone for this logical qubit
+        int wid = logical_qubits[qid].waveform_id;
+        if (wid < 0 || wid >= (int)waveforms.size()) continue;
+
+        size_t carrier_idx = static_cast<size_t>(-1);
+        for (size_t i = 0; i < waveforms[wid].tones.size(); ++i) {
+            if (waveforms[wid].tones[i].logical_id == static_cast<int>(qid) &&
+                std::abs(waveforms[wid].tones[i].freq - allocated_carriers[qid]) < 1e-6) {
+                carrier_idx = i;
+                break;
+            }
+        }
+        if (carrier_idx == static_cast<size_t>(-1)) continue;
+
+        // 4. Apply IQ step
+        waveforms[wid].tones[carrier_idx].set_iq(i0, q0);
+
+        // 5. Compile waveform and advance one period
+        compile_to_physical_waveform();
+        run_periods(1);
+
+        // 6. Promote incremental rotation to logical_phase
+        logical_phase[qid] = std::fmod(logical_phase[qid] + H_amp, 2.0 * M_PI);
+    }
+}
+
+// --------------------------------------------------------
+// Step-wise logical Hadamard (incremental, phase-aware)
+// --------------------------------------------------------
+void SpiralVM::logical_hadamard_step(uint32_t qid, double H_amp) {
+    // 1. Get the current logical orbit phase
     double phi = current_orbit_phase(qid);
 
-    // --- 2. Set the desired Hadamard rotation in IQ space
-    // Hadamard: π rotation around (X+Z)/√2
-    double base_amp = 161.1 / std::sqrt(2.0); // calibrated amplitude
+    // 2. Compute incremental I/Q amplitudes aligned to the phase
+    double i0 = H_amp * std::cos(phi);
+    double q0 = H_amp * std::sin(phi);
 
-    // Align IQ to the logical orbit phase
-    // Maps Z→X rotation properly along the current orbit
-    double i_aligned = base_amp * std::cos(phi + M_PI/4.0);
-    double q_aligned = base_amp * std::sin(phi + M_PI/4.0);
-
-    // --- 3. Find the carrier tone for this logical qubit
+    // 3. Find carrier tone for this logical qubit
     int wid = logical_qubits[qid].waveform_id;
     if (wid < 0 || wid >= (int)waveforms.size()) return;
 
     size_t carrier_idx = static_cast<size_t>(-1);
     for (size_t i = 0; i < waveforms[wid].tones.size(); ++i) {
-        Tone &tn = waveforms[wid].tones[i];
-        if (tn.logical_id == static_cast<int>(qid) &&
-            std::abs(tn.freq - allocated_carriers[qid]) < 1e-6) {
+        if (waveforms[wid].tones[i].logical_id == static_cast<int>(qid) &&
+            std::abs(waveforms[wid].tones[i].freq - allocated_carriers[qid]) < 1e-6) {
             carrier_idx = i;
             break;
         }
     }
     if (carrier_idx == static_cast<size_t>(-1)) return;
 
-    // --- 4. Set the IQ of the tone along the logical orbit
-    waveforms[wid].tones[carrier_idx].set_iq(i_aligned, q_aligned);
+    // 4. Apply incremental IQ
+    waveforms[wid].tones[carrier_idx].set_iq(i0, q0);
 
-    // --- 5. Push to physical waveform and evolve one period
+    // 5. Compile waveform and advance one period
     compile_to_physical_waveform();
-    run_periods(1.0);
+    run_periods(1);
 
-    // --- 6. Update logical_phase to track Hadamard rotation (π/2 along X+Z)
-    logical_phase[qid] = std::fmod(logical_phase[qid] + M_PI/2.0, 2.0*M_PI);
+    // 6. Promote effect into logical_phase (optional)
+    logical_phase[qid] = std::fmod(logical_phase[qid] + H_amp, 2.0 * M_PI);
 }
+
 
 
 
@@ -951,6 +994,73 @@ void SpiralVM::logical_x_pulse(uint32_t qid, double duration_periods) {
     compile_to_physical_waveform();
 
 }
+
+// Applies a logical Y (pi rotation) to the specified qubit.
+// Same as logical_x_pulse, but with a +π/2 quadrature shift.
+void SpiralVM::logical_y_pulse(uint32_t qid, double duration_periods) {
+    if (qid >= logical_qubits.size()) {
+        std::cout << "[SpiralVM] Invalid qubit id for logical Y: " << qid << "\n";
+        return;
+    }
+
+    int wid = logical_qubits[qid].waveform_id;
+    if (wid < 0 || wid >= (int)waveforms.size()) {
+        std::cout << "[SpiralVM] No waveform found for qubit " << qid << "\n";
+        return;
+    }
+
+    // Find the main carrier tone for this qubit
+    size_t carrier_idx = static_cast<size_t>(-1);
+    for (size_t i = 0; i < waveforms[wid].tones.size(); ++i) {
+        if (waveforms[wid].tones[i].logical_id == (int)qid &&
+            std::abs(waveforms[wid].tones[i].freq - allocated_carriers[qid]) < 1e-6) {
+            carrier_idx = i;
+            break;
+        }
+    }
+    if (carrier_idx == static_cast<size_t>(-1)) {
+        std::cout << "[SpiralVM] No carrier tone found for qubit " << qid << "\n";
+        return;
+    }
+
+    // SAVE STATE
+    std::vector<int> saved_drive_index = drive_index;
+    double original_amp   = waveforms[wid].tones[carrier_idx].amp;
+    double original_phase = waveforms[wid].tones[carrier_idx].phase;
+
+    // BOOST + ORBIT ALIGN, but rotate into quadrature
+    double quasi = is_ang ? (sin(omega * current_period) + sin(2*omega * current_period)) : 0.0;
+
+    waveforms[wid].tones[carrier_idx].amp *=
+        LOGICAL_X_AMPLITUDE * cos(2.0 * current_period * M_PI / (512 * T));
+
+    // X used: phase += π * sign(quasi)
+    // Y uses: phase += π * sign(quasi) + π/2
+    waveforms[wid].tones[carrier_idx].phase +=
+        M_PI * (quasi > 0 ? 1.0 : -1.0) + M_PI * 0.5;
+
+    compile_to_physical_waveform();
+
+    // PULSE WITH NO SIDE EFFECTS
+    bool saved_auto = auto_compile_enabled;
+    auto_compile_enabled = false;
+    std::vector<int> pulse_drive_index = drive_index;
+
+    uint32_t steps = std::ceil(duration_periods);
+    for (uint32_t i = 0; i < steps; i++) {
+        double dummy_F = 0.0;
+        drive_index = pulse_drive_index;
+        step_period(current_period + i, dummy_F);
+    }
+
+    // CLEANUP
+    drive_index = saved_drive_index;
+    waveforms[wid].tones[carrier_idx].amp   = original_amp;
+    waveforms[wid].tones[carrier_idx].phase = original_phase;
+    auto_compile_enabled = saved_auto;
+    compile_to_physical_waveform();
+}
+
 
 void SpiralVM::logical_Z(uint32_t qid, double angle) {
     if (qid >= logical_phase.size()) return;

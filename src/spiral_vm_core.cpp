@@ -271,6 +271,25 @@ void SpiralVM::lowpass_filter_waveform(Waveform &w, double cutoff_factor) {
     }
 }
 
+DriveXY SpiralVM::eval_waveform_xy(const Waveform &w,
+                                   double t,
+                                   double local_phase) const {
+    DriveXY out{0.0, 0.0};
+
+    for (const auto &tn : w.tones) {
+        // The phase argument includes frequency, fixed phase, and the Floquet local phase
+
+        double arg = tn.freq * t + tn.phase + local_phase;
+
+        // Now IQ are *true* quadrature amplitudes
+        out.hx += tn.I_component * std::cos(arg);
+        out.hy += tn.Q_component * std::sin(arg);
+    }
+
+    return out;
+}
+
+
 // evaluate waveform with optional local envelope-handling (period fraction ignored for now)
 double SpiralVM::eval_waveform_with_envelope(const Waveform &w,
                                              double t,
@@ -299,7 +318,10 @@ uint32_t SpiralVM::add_qubit(uint32_t x, uint32_t y) {
     q.center_x = x;
     q.center_y = y;
     q.base_phase = 0.0;
+    q.sheet = 0;                 // start on base sheet (0–2π)
     logical_qubits.push_back(q);
+
+    // Unwrapped phase coordinate (ℝ, not mod 2π)
     logical_phase.push_back(0.0);
 
     uint32_t qid = logical_qubits.size() - 1;
@@ -314,15 +336,21 @@ uint32_t SpiralVM::add_qubit(uint32_t x, uint32_t y) {
             if (col < 0 || col >= cols) continue;
             int phys_idx = row * cols + col;
             drive_index[phys_idx] = wf_id;
-            // phys_to_logicals bookkeeping
-            if ((int)phys_to_logicals.size() < N) phys_to_logicals.resize(N);
+
+            if ((int)phys_to_logicals.size() < N)
+                phys_to_logicals.resize(N);
+
             phys_to_logicals[phys_idx].push_back(qid);
         }
     }
 
-    cout << "[SpiralVM] Added logical qubit " << qid << " @("<<x<<","<<y<<"), wf="<<wf_id<<"\n";
+    cout << "[SpiralVM] Added logical qubit " << qid
+         << " @(" << x << "," << y << "), wf=" << wf_id
+         << ", sheet=" << logical_qubits[qid].sheet << "\n";
+
     return qid;
 }
+
 
 
 
@@ -671,70 +699,78 @@ void SpiralVM::step_period(int n, double &delta_F) {
     double dt = T / steps;
     cx_mat phi_new = phi;
 
-    // ---- Frequency scattering parameters ----
-    double f_min = 1.0e6;    // minimal frequency (Hz)
-    double f_max = 1.0e9;    // maximal frequency (Hz)
-    std::uniform_real_distribution<double> dist(f_min, f_max);
-
-    std::vector<double> qubit_freqs(N, 0.0);
-    for (int i = 0; i < N; ++i) {
-        qubit_freqs[i] = dist(rng);   // assign a random frequency per qubit
+    // Initialize per-site carrier freqs once
+    if ((int)qubit_freqs.size() != N) {
+        qubit_freqs.resize(N);
+        std::uniform_real_distribution<double> dist(1.0e6, 1.0e9);
+        for (int i = 0; i < N; ++i) qubit_freqs[i] = dist(rng);
     }
 
-    // ---- RK4 integration per site ----
     for (int k = 0; k < steps; k++) {
         double t = n * T + k * dt;
 
-        // local field per qubit, phase-aware
+        // ---- local transverse fields ----
         std::vector<double> local_hx(N, 0.0);
+        std::vector<double> local_hy(N, 0.0);
 
         for (int i = 0; i < N; ++i) {
             int wid = drive_index[i];
-
-            double phase_offset = drive_phase; // default
+            double phase_offset = drive_phase;
 
             if (wid >= 0 && wid < (int)waveforms.size()) {
-                // look for tone assigned to this qubit
                 for (auto &tn : waveforms[wid].tones) {
-                    if (tn.freq == allocated_carriers[i] && tn.logical_id >= 0) {
+                    if (tn.logical_id >= 0) {
                         phase_offset = logical_phase[tn.logical_id];
                         break;
                     }
                 }
             }
 
-            double val = 0.0;
+            DriveXY d;
             if (wid == -2) {
-                val = eval_waveform_with_envelope(physical_waveform, t, phase_offset);
+                d = eval_waveform_xy(physical_waveform, t, phase_offset);
             } else if (wid < 0 || wid >= (int)waveforms.size()) {
-                val = h1 * cos(qubit_freqs[i]*t + M_PI/4.0 + phase_offset);
+                d.hx = h1 * cos(qubit_freqs[i] * t + M_PI/4.0 + phase_offset);
+                d.hy = 0;
             } else {
-                val = eval_waveform_with_envelope(waveforms[wid], t, phase_offset);
+                d = eval_waveform_xy(waveforms[wid], t, phase_offset);
             }
-
-            local_hx[i] = h0 + val;
+            local_hx[i] = h0 + d.hx;
+            local_hy[i] = d.hy;
         }
 
-
-
-
-        // angular modulation
-        double angular_freq_quasi = is_ang ? (sin(omega * M_PI * t / T) + sin(2*omega * M_PI * t / T)) : 0.0;
+        // ---- angular modulation ----
+        double angular_freq_quasi = is_ang ? (sin(omega * M_PI * t / T)
+                                            + sin(2 * omega * M_PI * t / T)) : 0.0;
         double omega_ang = omega_ang_base + angular_freq_quasi;
 
-        // Hamiltonian
-        sp_cx_mat H_sx = hamiltonian_cl10_90_spiral_twist_inhomogeneous(J, local_hx, omega_ang);
+        // ---- Hamiltonians ----
+        sp_cx_mat Hx =
+            hamiltonian_cl10_90_spiral_twist_inhomogeneous(J, local_hx, omega_ang);
+
+        sp_cx_mat Hy =
+            hamiltonian_cl10_90_spiral_twist_inhomogeneous_y(J, local_hy, omega_ang);
+
+        sp_cx_mat H_sx = Hx + Hy;
+
+
+
         cx_mat Hzz_phi = compute_zz_energy_vector_edgeaware(phi_new, J, omega_ang, n, is_ang);
 
-        // RK4 steps
+        // ---- RK4 ----
         cx_mat k1 = mat_vec_mult_cl10(H_sx, phi_new) + Hzz_phi;
         cx_mat phi_temp = phi_new + (-cx_double(0,1) * dt/2.0) * k1;
 
-        cx_mat k2 = mat_vec_mult_cl10(H_sx, phi_temp) + compute_zz_energy_vector_edgeaware(phi_temp, J, omega_ang, n, is_ang);
+        cx_mat k2 = mat_vec_mult_cl10(H_sx, phi_temp)
+                  + compute_zz_energy_vector_edgeaware(phi_temp, J, omega_ang, n, is_ang);
         phi_temp = phi_new + (-cx_double(0,1) * dt/2.0) * k2;
-        cx_mat k3 = mat_vec_mult_cl10(H_sx, phi_temp) + compute_zz_energy_vector_edgeaware(phi_temp, J, omega_ang, n, is_ang);
+
+        cx_mat k3 = mat_vec_mult_cl10(H_sx, phi_temp)
+                  + compute_zz_energy_vector_edgeaware(phi_temp, J, omega_ang, n, is_ang);
         phi_temp = phi_new + (-cx_double(0,1) * dt) * k3;
-        cx_mat k4 = mat_vec_mult_cl10(H_sx, phi_temp) + compute_zz_energy_vector_edgeaware(phi_temp, J, omega_ang, n, is_ang);
+
+        cx_mat k4 = mat_vec_mult_cl10(H_sx, phi_temp)
+                  + compute_zz_energy_vector_edgeaware(phi_temp, J, omega_ang, n, is_ang);
 
         phi_new += (-cx_double(0,1) * dt/6.0) * (k1 + 2.0*k2 + 2.0*k3 + k4);
 
@@ -745,27 +781,24 @@ void SpiralVM::step_period(int n, double &delta_F) {
     phi = phi_new;
     state = phi;
 
-    // fidelity
     double fid = fabs(inner_product_cl10(phi_in, phi));
-    if ((int)fidelities.size() <= current_period+1) fidelities.resize(current_period+2, 0.0);
+    if ((int)fidelities.size() <= current_period+1)
+        fidelities.resize(current_period+2, 0.0);
     fidelities[current_period+1] = fid;
-    //std::cout << "period: " << current_period+1 << " fidelity: " << fid << std::endl;
-    //std::cout << std::flush;
     delta_F = 1.0 - fid;
 
-
-    // WITH:
     if (auto_compile_enabled) {
-        compile_to_physical_waveform();                   // always merge
+        compile_to_physical_waveform();
     }
 
     std::string fname_base = "global_" + std::to_string(current_period);
-    dump_waveforms("csv", fname_base, -1); // always dump the physical one
+    dump_waveforms("csv", fname_base, -1);
     std::string fname_base_h = "h_eff_" + std::to_string(current_period);
     dump_h_eff(fname_base_h, -1);
 
     current_period++;
 }
+
 
 int SpiralVM::get_total_logical_qubits(){
     return logical_qubits.size();
@@ -777,10 +810,20 @@ void SpiralVM::run_periods(uint32_t N_periods) {
     double dt = N_periods * T;   // physical time advanced
 
     for (size_t q = 0; q < logical_phase.size(); ++q) {
-        logical_phase[q] = std::fmod(
-            logical_phase[q] + allocated_carriers[q] * dt,
-            2.0 * M_PI
-        );
+        double prev = logical_phase[q];
+        logical_phase[q] += allocated_carriers[q] * dt;   // UNWRAPPED
+
+        // detect sheet crossings
+        int prev_sheet = logical_qubits[q].sheet;
+        int new_sheet  = (int)std::floor(logical_phase[q] / (2.0 * M_PI));
+
+        if (new_sheet != prev_sheet) {
+            logical_qubits[q].sheet = new_sheet;
+            std::cout << "[SpiralVM] q" << q
+                      << " crossed sheet boundary: "
+                      << prev_sheet << " -> " << new_sheet
+                      << " (φ=" << logical_phase[q] << ")\n";
+        }
     }
 
     double dummy_deltaF = 0.0;
@@ -844,12 +887,12 @@ void SpiralVM::logical_hadamard(uint32_t qid, int N_steps, double H_amp) {
     if (qid >= logical_qubits.size()) return;
 
     for (int step = 0; step < N_steps; ++step) {
-        // 1. Current logical orbit phase
-        double phi = current_orbit_phase(qid);
-
         // 2. Compute incremental IQ aligned to phase
-        double i0 = H_amp * std::cos(phi + M_PI/4);  // offset to approximate π/2 rotation
-        double q0 = H_amp * std::sin(phi + M_PI/4);
+        // DO NOT rotate with phi
+        double i0 = H_amp * std::cos(M_PI/4);
+        double q0 = H_amp * std::sin(M_PI/4);
+
+
 
         // 3. Find carrier tone for this logical qubit
         int wid = logical_qubits[qid].waveform_id;
@@ -871,9 +914,6 @@ void SpiralVM::logical_hadamard(uint32_t qid, int N_steps, double H_amp) {
         // 5. Compile waveform and advance one period
         compile_to_physical_waveform();
         run_periods(1);
-
-        // 6. Promote incremental rotation to logical_phase
-        logical_phase[qid] = std::fmod(logical_phase[qid] + H_amp, 2.0 * M_PI);
     }
 }
 
@@ -881,12 +921,12 @@ void SpiralVM::logical_hadamard(uint32_t qid, int N_steps, double H_amp) {
 // Step-wise logical Hadamard (incremental, phase-aware)
 // --------------------------------------------------------
 void SpiralVM::logical_hadamard_step(uint32_t qid, double H_amp) {
-    // 1. Get the current logical orbit phase
-    double phi = current_orbit_phase(qid);
-
     // 2. Compute incremental I/Q amplitudes aligned to the phase
-    double i0 = H_amp * std::cos(phi);
-    double q0 = H_amp * std::sin(phi);
+    // DO NOT rotate with phi
+    double i0 = H_amp * std::cos(M_PI/4);
+    double q0 = H_amp * std::sin(M_PI/4);
+    
+
 
     // 3. Find carrier tone for this logical qubit
     int wid = logical_qubits[qid].waveform_id;
@@ -909,8 +949,6 @@ void SpiralVM::logical_hadamard_step(uint32_t qid, double H_amp) {
     compile_to_physical_waveform();
     run_periods(1);
 
-    // 6. Promote effect into logical_phase (optional)
-    logical_phase[qid] = std::fmod(logical_phase[qid] + H_amp, 2.0 * M_PI);
 }
 
 
@@ -918,7 +956,14 @@ void SpiralVM::logical_hadamard_step(uint32_t qid, double H_amp) {
 
 double SpiralVM::current_orbit_phase(uint32_t qid) const {
     if (qid >= logical_phase.size()) return 0.0;
-    return std::fmod(logical_phase[qid], 2.0 * M_PI);
+    return logical_phase[qid];              // UNWRAPPED
+}
+inline double wrap_phase(double x) {
+    const double two_pi = 2.0 * M_PI;
+    x = std::fmod(x, two_pi);
+    if (x < -M_PI) x += two_pi;
+    if (x >  M_PI) x -= two_pi;
+    return x;
 }
 
 
@@ -966,7 +1011,7 @@ void SpiralVM::logical_x_pulse(uint32_t qid, double duration_periods) {
     // BOOST + ORBIT ALIGN (1 extra line!)
     double quasi = is_ang ? (sin(omega * current_period) + sin(2*omega * current_period)) : 0.0;
     waveforms[wid].tones[carrier_idx].amp *= LOGICAL_X_AMPLITUDE * cos(2.0 * current_period * M_PI/(512*T));
-    waveforms[wid].tones[carrier_idx].phase += M_PI * (quasi > 0 ? 1.0 : -1.0);
+    waveforms[wid].tones[carrier_idx].phase += wrap_phase(M_PI * (quasi > 0 ? 1.0 : -1.0));
     //waveforms[wid].tones[carrier_idx].amp = clamp_tone_amp(waveforms[wid].tones[carrier_idx].amp);
     std::cout << "[DEBUG] waveforms[wid].tones[carrier_idx].phase=" << waveforms[wid].tones[carrier_idx].phase << "\n";
 
@@ -1036,8 +1081,8 @@ void SpiralVM::logical_y_pulse(uint32_t qid, double duration_periods) {
 
     // X used: phase += π * sign(quasi)
     // Y uses: phase += π * sign(quasi) + π/2
-    waveforms[wid].tones[carrier_idx].phase +=
-        M_PI * (quasi > 0 ? 1.0 : -1.0) + M_PI * 0.5;
+    waveforms[wid].tones[carrier_idx].phase += wrap_phase(
+        M_PI * (quasi > 0 ? 1.0 : -1.0) + M_PI * 0.5);
 
     compile_to_physical_waveform();
 
@@ -1056,15 +1101,16 @@ void SpiralVM::logical_y_pulse(uint32_t qid, double duration_periods) {
     // CLEANUP
     drive_index = saved_drive_index;
     waveforms[wid].tones[carrier_idx].amp   = original_amp;
-    waveforms[wid].tones[carrier_idx].phase = original_phase;
+    waveforms[wid].tones[carrier_idx].phase = wrap_phase(original_phase);
     auto_compile_enabled = saved_auto;
     compile_to_physical_waveform();
 }
 
 
+
 void SpiralVM::logical_Z(uint32_t qid, double angle) {
     if (qid >= logical_phase.size()) return;
-    logical_phase[qid] = std::fmod(logical_phase[qid] + angle, 2.0 * M_PI);
+    logical_phase[qid] += angle;            // NO fmod
 }
 
 double SpiralVM::measure_logical_Z(uint32_t qid) const {
@@ -1164,18 +1210,7 @@ void SpiralVM::logical_phase_ramp(int target_qid, double angle, int steps) {
 
 double SpiralVM::get_logical_phase(uint32_t qid) {
     if (qid >= logical_qubits.size()) return 0.0;
-    const LogicalQubit &q = logical_qubits[qid];
-
-    // pick the center site of the qubit
-    int row = q.center_y;
-    int col = q.center_x;
-    if (row < 0 || row >= rows || col < 0 || col >= cols) return 0.0;
-
-    int i = row*cols + col;
-    // D offset: pick the "physical" component corresponding to the |1> amplitude
-    std::complex<double> amp_center = phi(i*D + 1,0);
-
-    return std::arg(amp_center);
+    return std::fmod(logical_phase[qid], 2.0 * M_PI);  // only for hardware
 }
 
 void SpiralVM::logical_z_rotation(uint32_t qid, double angle) {
@@ -1267,7 +1302,7 @@ void SpiralVM::apply_phase_kick_between_full(uint32_t qid1, uint32_t qid2,
     waveforms.push_back(std::move(w));
 
     // Temporarily assign to both logical neighborhoods
-    std::vector<int> old_drive_indices;
+    std::vector<std::pair<int,int>> touched;
     for (int q : {qid1, qid2}) {
         auto& qb = logical_qubits[q];
         for (int r = qb.center_y - R; r <= qb.center_y + R; ++r) {
@@ -1275,27 +1310,21 @@ void SpiralVM::apply_phase_kick_between_full(uint32_t qid1, uint32_t qid2,
             for (int c = qb.center_x - R; c <= qb.center_x + R; ++c) {
                 if (c < 0 || c >= cols) continue;
                 int idx = r * cols + c;
-                old_drive_indices.push_back(drive_index[idx]);  // save
+                touched.emplace_back(idx, drive_index[idx]);
                 drive_index[idx] = temp_wid;
             }
         }
     }
 
-    // Let the interaction act
-    run_periods(1);   // or more if duration_fraction > 1
+    uint32_t steps = std::ceil(duration_fraction);
+    for (uint32_t k = 0; k < steps; ++k) {
+        run_periods(1);
+    }
+
 
     // Restore original drive assignments
-    size_t restore_idx = 0;
-    for (int q : {qid1, qid2}) {
-        auto& qb = logical_qubits[q];
-        for (int r = qb.center_y - R; r <= qb.center_y + R; ++r) {
-            if (r < 0 || r >= rows) continue;
-            for (int c = qb.center_x - R; c <= qb.center_x + R; ++c) {
-                if (c < 0 || c >= cols) continue;
-                int idx = r * cols + c;
-                drive_index[idx] = old_drive_indices[restore_idx++];
-            }
-        }
+    for (auto& [idx, old] : touched) {
+        drive_index[idx] = old;
     }
 
     // Optional: remove temp waveform to save memory
@@ -1342,6 +1371,25 @@ arma::sp_cx_mat SpiralVM::hamiltonian_cl10_90_spiral_twist_inhomogeneous(double 
         // off-diagonal entries:
         locations(0, nz) = i*D; locations(1, nz) = i*D + 1; values(nz) = -hx; nz++;
         locations(0, nz) = i*D + 1; locations(1, nz) = i*D; values(nz) = -hx; nz++;
+    }
+    return arma::sp_cx_mat(locations.submat(0,0,1,nz-1), values.subvec(0,nz-1), N_local*D, N_local*D);
+}
+
+arma::sp_cx_mat SpiralVM::hamiltonian_cl10_90_spiral_twist_inhomogeneous_y(double J, const std::vector<double> &local_hy, double omega_ang) {
+    int N_local = rows * cols;
+    // We construct sigma_y terms with per-site coefficients.
+    // Each physical site i contributes -hy_i * (|0><1| + |1><0|)
+    // plus we keep ZZ terms out of this routine (handled separately via compute_zz_energy_vector)
+    // Build sparse matrix entries for all |0><1| and |1><0|
+    int NNZ = 2 * N_local;
+    arma::umat locations(2, NNZ);
+    arma::cx_vec values(NNZ);
+    uint nz = 0;
+    for (int i = 0; i < N_local; ++i) {
+        double hy = (i < (int)local_hy.size()) ? local_hy[i] : 0;
+        // off-diagonal entries:
+        locations(0, nz) = i*D; locations(1, nz) = i*D + 1; values(nz) = -hy; nz++;
+        locations(0, nz) = i*D + 1; locations(1, nz) = i*D; values(nz) = -hy; nz++;
     }
     return arma::sp_cx_mat(locations.submat(0,0,1,nz-1), values.subvec(0,nz-1), N_local*D, N_local*D);
 }
@@ -1475,9 +1523,9 @@ double SpiralVM::compute_avg_stabilizer(const arma::cx_mat& phi_inp) {
 }
 
 // Dumps effective Hamiltonian components to CSV for the current period.
-// Includes: period, site_idx, local_hx (transverse field per site), omega_ang,
-// and global tone details (amp,freq,phase per tone).
-// Call this in step_period after computing local_hx and omega_ang.
+// Includes: period, site_idx, local_hx, local_hy (transverse fields per site),
+// omega_ang, and global tone details (amp,freq,phase per tone,logical_id).
+// Call this in step_period after computing local_hx and local_hy.
 void SpiralVM::dump_h_eff(const std::string& fname_base, int period) const {
     std::string fname = fname_base + "_h_eff_period" + (period < 0 ? "_latest" : std::to_string(period)) + ".csv";
     std::ofstream fout(fname);
@@ -1487,26 +1535,34 @@ void SpiralVM::dump_h_eff(const std::string& fname_base, int period) const {
     }
 
     int curr_period = (period < 0) ? current_period : period;
+
     // Header
     fout << "# SpiralVM h_eff Dump\n";
     fout << "# Period: " << curr_period << "\n";
     fout << "# T (s): " << T << "\n";
     fout << "# omega_ang: " << omega_ang_end(curr_period) << "\n";  // End-of-period angular mod
     fout << "# J: " << J << "\n";
-    fout << "# Columns: site_idx,local_hx,drive_wid\n";
+    fout << "# Columns: site_idx,local_hx,local_hy,drive_wid\n";
 
-    // Per-site local_hx and drive index (computed at t_end for simplicity)
     double t_end = curr_period * T;
+
     for (int i = 0; i < N; ++i) {
         int wid = drive_index[i];
-        double local_hx_val = h0;
+        DriveXY d{0.0, 0.0};
+
         if (wid >= 0 && wid < (int)waveforms.size()) {
-            local_hx_val += eval_waveform_with_envelope(waveforms[wid], t_end, drive_phase);
+            d = eval_waveform_xy(waveforms[wid], t_end, drive_phase);
         } else {
-            // Fallback (from your step_period)
-            local_hx_val += h1 * cos(omega * (t_end / 2.0) + M_PI/4.0 + drive_phase);
+            // Fallback: h1 in X, zero in Y
+            d.hx = h1 * std::cos(omega * (t_end / 2.0) + M_PI/4.0 + drive_phase);
+            d.hy = 0.0;
         }
-        fout << i << "," << local_hx_val << "," << wid << "\n";
+
+        // Include static bias h0 in X only
+        double local_hx_val = h0 + d.hx;
+        double local_hy_val = d.hy;
+
+        fout << i << "," << local_hx_val << "," << local_hy_val << "," << wid << "\n";
     }
 
     // Section for global/merged tones (if compiled)
@@ -1522,6 +1578,7 @@ void SpiralVM::dump_h_eff(const std::string& fname_base, int period) const {
     fout.close();
     std::cout << "[SpiralVM] Dumped h_eff to " << fname << "\n";
 }
+
 
 // Reconstructs approximate amplitude and phase for a logical qubit from a dumped waveform CSV.
 // Assumes CSV from dump_waveforms("csv", ...) with columns: time_s,I,Q,amp,phase_rad
@@ -1577,7 +1634,11 @@ std::pair<double, double> SpiralVM::reconstruct_logical_amp_phase_from_csv(const
 
     // FFT of IQ signal
     arma::cx_vec fft_iq = arma::fft(iq);
-    arma::vec freqs = arma::linspace<arma::vec>(0, 1.0 / (times(1) - times(0)), iq.n_elem);
+    arma::vec freqs(iq.n_elem);
+    double dt = times(1) - times(0);
+    double fs = 1.0 / dt;
+    for (size_t k = 0; k < iq.n_elem; ++k)
+        freqs(k) = k * fs / iq.n_elem;
 
     // Find index closest to carrier_freq
     arma::uword idx = arma::index_min(arma::abs(freqs - carrier_freq));

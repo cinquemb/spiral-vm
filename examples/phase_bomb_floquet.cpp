@@ -25,6 +25,7 @@ static inline double wrap_dist(double a, double b) {
 
 int main() {
     SpiralVM vm(30, 30);
+    vm.is_ang = true;
     vm.initialize_state("neel");
 
     uint32_t q0 = vm.add_qubit(15, 15);
@@ -60,9 +61,9 @@ int main() {
             continue;
         }
 
-        // Twin systems
-        SpiralVM a = vm;
-        SpiralVM b = vm;
+        // Twin systems (copy-construct, never assign)
+        SpiralVM a(vm);
+        SpiralVM b(vm);
 
         // Tiny transverse offset
         b.logical_phase_ramp(q0, EPS, 1);

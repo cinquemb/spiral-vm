@@ -68,6 +68,8 @@ struct LogicalQubit {
     double base_phase;
     // allocator info
     int waveform_id = -1;
+    int    sheet;   // implicit: phi < 2π ? 0 : 1
+
 };
 
 struct Gate {
@@ -80,10 +82,15 @@ struct Gate {
         : type(t), target(tgt), control(ctrl), angle(ang) {}
 };
 
+struct DriveXY {
+    double hx;
+    double hy;
+};
+
 class SpiralVM {
 public:
     SpiralVM(int rows, int cols);  // constructor
-    double LOGICAL_X_AMPLITUDE = 125;///1396999.7245;
+    double LOGICAL_X_AMPLITUDE = 1;///1396999.7245;
     double PHASE_RAMP_MAGNITUDE = 0.5;
 
 
@@ -184,6 +191,7 @@ private:
 
     bool auto_compile_enabled = true;  // member variable
 
+    std::vector<double> qubit_freqs;
 
 
     arma::cx_mat phi;                  // Quantum state vector (2*N x 1)
@@ -191,6 +199,7 @@ private:
     int steps;                   // RK4 steps per period
     int current_period;          // Tracks Floquet periods elapsed
     double sx_gain;              // h1 gain parameter
+
 
 
     // Mapping physical qubits to logical qubits (allows many logicals per physical)
@@ -222,6 +231,7 @@ private:
     Waveform make_cz_waveform(uint32_t qid1, uint32_t qid2, double strength, double duration_fraction);
     void lowpass_filter_waveform(Waveform &w, double cutoff_factor);
     double eval_waveform_with_envelope(const Waveform &w, double t, double local_period_fraction=0.0) const;
+    DriveXY eval_waveform_xy(const Waveform &w, double t, double local_phase) const ;
 
     // Hamiltonian helpers
     arma::cx_mat mat_vec_mult_cl10(const arma::sp_cx_mat& H, const arma::cx_mat& phi);
@@ -233,6 +243,7 @@ private:
     void compute_nonzero_indices_spiral_twist(double J, double ht, int rows, int cols, int D, double omega_ang, arma::umat& locations, arma::cx_vec& values, uint& nz);
     arma::sp_cx_mat hamiltonian_cl10_90_spiral_twist(double J, double ht, double omega_ang);
     arma::sp_cx_mat hamiltonian_cl10_90_spiral_twist_inhomogeneous(double J, const std::vector<double> &local_hx, double omega_ang);
+    arma::sp_cx_mat hamiltonian_cl10_90_spiral_twist_inhomogeneous_y(double J, const std::vector<double> &local_hy, double omega_ang);
 
     int get_right_neighbor(int row, int col) const;
     int get_down_neighbor(int row, int col) const;

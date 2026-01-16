@@ -19,7 +19,7 @@ int main() {
     vm.logical_x_pulse(q0, 1);
 
     const int N_steps = 50;
-    const double H_base = 0.2;     // tiny Hadamard step amplitude
+    const double H_base = 1.2;     // tiny Hadamard step amplitude
     const double Z_kick_max = 0.05; // small random Z kick
 
     std::mt19937 rng(1234);
@@ -37,7 +37,7 @@ int main() {
         // --- 1. Small misaligned Hadamard step ---
         double i0 = H_base * (0.5 + 0.5 * std::sin(phi_before));
         double q0_amp = H_base * (0.5 + 0.5 * std::cos(phi_before));
-        vm.logical_hadamard_step(q0, i0, q0_amp); // new step-wise H
+        vm.logical_hadamard(q0, i0, q0_amp); // new step-wise H
 
         double phi_after_H = vm.current_orbit_phase(q0);
 

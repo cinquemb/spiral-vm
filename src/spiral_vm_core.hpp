@@ -90,7 +90,7 @@ struct DriveXY {
 class SpiralVM {
 public:
     SpiralVM(int rows, int cols);  // constructor
-    double LOGICAL_X_AMPLITUDE = 1;///1396999.7245;
+    double LOGICAL_X_AMPLITUDE = 1;
     double PHASE_RAMP_MAGNITUDE = 0.5;
 
 
@@ -183,6 +183,8 @@ public:
     // Frequency allocation bookkeeping
     std::vector<double> allocated_carriers;
     std::vector<double> logical_phase;  // size = num logical qubits
+    std::vector<int> drive_index;          // size N, drive_index[i] = waveform ID
+
 
 private:
     // internal state
@@ -215,7 +217,6 @@ private:
 
     // Waveform engine (bank + mapping)
     Waveform physical_waveform;               // index 0 only: merged physical;
-    std::vector<int> drive_index;          // size N, drive_index[i] = waveform ID
 
 
     std::vector<double> virtual_frame_phase;  // VIRTUAL Z: infinite T2 bookkeeping
@@ -244,6 +245,9 @@ private:
     arma::sp_cx_mat hamiltonian_cl10_90_spiral_twist(double J, double ht, double omega_ang);
     arma::sp_cx_mat hamiltonian_cl10_90_spiral_twist_inhomogeneous(double J, const std::vector<double> &local_hx, double omega_ang);
     arma::sp_cx_mat hamiltonian_cl10_90_spiral_twist_inhomogeneous_y(double J, const std::vector<double> &local_hy, double omega_ang);
+    arma::sp_cx_mat hamiltonian_cl10_90_spiral_twist_inhomogeneous_XY(
+    double J, const std::vector<double> &local_hx,
+    const std::vector<double> &local_hy, double omega_ang);
 
     int get_right_neighbor(int row, int col) const;
     int get_down_neighbor(int row, int col) const;

@@ -1,9 +1,6 @@
-// ---------- PHASE-BOMB EXPERIMENT ----------
 #include "../src/spiral_vm_core.hpp"
 #include <iostream>
 #include <iomanip>
-#include <cmath>
-#include <vector>
 #include <random>
 
 int main() {
@@ -14,51 +11,41 @@ int main() {
     auto Z = [&vm](uint32_t id){ return vm.measure_logical_Z(id); };
     auto X = [&vm](uint32_t id){ return vm.measure_logical_X(id); };
 
-    // Start in |0>_L
+    // Prepare |0>_L
     vm.logical_x_pulse(q0, 1);
     vm.logical_x_pulse(q0, 1);
-
-    const int N_steps = 50;
-    const double H_base = 1.2;     // tiny Hadamard step amplitude
-    const double Z_kick_max = 0.05; // small random Z kick
-
-    std::mt19937 rng(1234);
-    std::uniform_real_distribution<double> dist(-Z_kick_max, Z_kick_max);
 
     std::cout << std::fixed << std::setprecision(6);
-    std::cout << "Step |    φ    |    Z    |    X    | Δφ(H) | Δφ(Z)\n";
-    std::cout << "---------------------------------------------------------\n";
+    std::cout << "Before any H: Z = " << Z(q0) << "   X = " << X(q0) << "\n\n";
 
-    for (int step = 0; step < N_steps; ++step) {
-        double phi_before = vm.current_orbit_phase(q0);
-        double Z_before = Z(q0);
-        double X_before = X(q0);
+    const int N_steps = 10;
+    const double H_base_candidates[] = {0.5, 1.0, 2.0, 5.0, 10.0, 20.0};
 
-        // --- 1. Small misaligned Hadamard step ---
-        double i0 = H_base * (0.5 + 0.5 * std::sin(phi_before));
-        double q0_amp = H_base * (0.5 + 0.5 * std::cos(phi_before));
-        vm.logical_hadamard(q0, i0, q0_amp); // new step-wise H
+    for (double H_base : H_base_candidates) {
+        std::cout << "\n=== Testing H_base = " << H_base << " ===\n";
+        std::cout << "Step |    φ    |    Z    |    X    | X_norm\n";
+        std::cout << "--------------------------------------------\n";
 
-        double phi_after_H = vm.current_orbit_phase(q0);
+        double Z_start = Z(q0);
+        double X_start = X(q0);
 
-        // --- 2. Random small Z kick ---
-        double z_kick = dist(rng);
-        vm.logical_phase_ramp(q0, z_kick, 1);   // promote to logical_phase
-        double phi_after_Z = vm.current_orbit_phase(q0);
+        for (int step = 0; step < N_steps; ++step) {
+            vm.logical_hadamard_step(q0, H_base);
 
-        // --- 3. Record ---
-        double Z_after = Z(q0);
-        double X_after = X(q0);
+            double Z_now = Z(q0);
+            double X_now = X(q0);
+            double X_norm = X_now / (std::hypot(X_now, Z_now) + 1e-6);
 
-        std::cout << std::setw(4) << step
-                  << " | " << std::setw(8) << phi_before
-                  << " | " << std::setw(8) << Z_before
-                  << " | " << std::setw(8) << X_before
-                  << " | " << std::setw(8) << (phi_after_H - phi_before)
-                  << " | " << std::setw(8) << (phi_after_Z - phi_after_H)
-                  << "\n";
+            std::cout << std::setw(4) << step
+                      << " | " << std::setw(8) << vm.current_orbit_phase(q0)
+                      << " | " << std::setw(8) << Z_now
+                      << " | " << std::setw(8) << X_now
+                      << " | " << std::setw(8) << X_norm
+                      << "\n";
+        }
+
+        std::cout << "Final with H_base=" << H_base << ": Z = " << Z(q0) << "   X = " << X(q0) << "\n";
     }
 
-    std::cout << "\nObserve: X now grows as the logical orbit is phase-bombed.\n";
     return 0;
 }

@@ -176,7 +176,7 @@ void SpiralVM::compile_to_physical_waveform() {
         physical_waveform.tones.emplace_back(amp, freq, phase, 0.0, 1.0, qid);
     }
 
-    std::fill(drive_index.begin(), drive_index.end(), -2);  // flag: use physical_waveform
+    //std::fill(drive_index.begin(), drive_index.end(), -2);  // flag: use physical_waveform
 
     cout << "[SpiralVM] Compiled " << waveforms.size() 
          << " logical → 1 physical waveform (" << physical_waveform.tones.size() << " tones)\n";
@@ -271,19 +271,15 @@ void SpiralVM::lowpass_filter_waveform(Waveform &w, double cutoff_factor) {
     }
 }
 
-DriveXY SpiralVM::eval_waveform_xy(const Waveform &w,
-                                   double t,
-                                   double local_phase) const {
+DriveXY SpiralVM::eval_waveform_xy(const Waveform &w, double t, double local_phase) const {
     DriveXY out{0.0, 0.0};
 
     for (const auto &tn : w.tones) {
-        // The phase argument includes frequency, fixed phase, and the Floquet local phase
-
         double arg = tn.freq * t + tn.phase + local_phase;
 
-        // Now IQ are *true* quadrature amplitudes
-        out.hx += tn.I_component * std::cos(arg);
-        out.hy += tn.Q_component * std::sin(arg);
+        // Standard IQ modulation (rotating frame)
+        out.hx += tn.I_component * cos(arg) - tn.Q_component * sin(arg);
+        out.hy += tn.I_component * sin(arg) + tn.Q_component * cos(arg);
     }
 
     return out;
@@ -737,6 +733,13 @@ void SpiralVM::step_period(int n, double &delta_F) {
             }
             local_hx[i] = h0 + d.hx;
             local_hy[i] = d.hy;
+
+            /*
+            if (i == 15*cols + 15) {  // q0 center
+                std::cout << "[step " << n << "] center site: wid = " << wid 
+                          << "  phase_offset = " << phase_offset 
+                          << "  d.hx = " << d.hx << "  d.hy = " << d.hy << "\n";
+            }*/
         }
 
         // ---- angular modulation ----
@@ -745,15 +748,8 @@ void SpiralVM::step_period(int n, double &delta_F) {
         double omega_ang = omega_ang_base + angular_freq_quasi;
 
         // ---- Hamiltonians ----
-        sp_cx_mat Hx =
-            hamiltonian_cl10_90_spiral_twist_inhomogeneous(J, local_hx, omega_ang);
-
-        sp_cx_mat Hy =
-            hamiltonian_cl10_90_spiral_twist_inhomogeneous_y(J, local_hy, omega_ang);
-
-        sp_cx_mat H_sx = Hx + Hy;
-
-
+        sp_cx_mat H_sx =
+            hamiltonian_cl10_90_spiral_twist_inhomogeneous_XY(J, local_hx, local_hy, omega_ang);
 
         cx_mat Hzz_phi = compute_zz_energy_vector_edgeaware(phi_new, J, omega_ang, n, is_ang);
 
@@ -857,7 +853,7 @@ void SpiralVM::logical_hadamard_tune(uint32_t qid) {
             double saved_q = waveforms[wid].tones[carrier_idx].Q_component;
             
             // TEST H
-            waveforms[wid].tones[carrier_idx].set_iq(amp, amp * q_phase);
+            waveforms[wid].tones[carrier_idx].set_iq(1.0, 1.0);
             compile_to_physical_waveform();
             run_periods(1.0);
             
@@ -879,60 +875,13 @@ void SpiralVM::logical_hadamard_tune(uint32_t qid) {
 }
 
 
-// --------------------------------------------------------
-// Full logical Hadamard using multiple incremental steps
-// Phase-covariant, builds X properly
-// --------------------------------------------------------
+// Full logical Hadamard: N_steps incremental locked rotations
 void SpiralVM::logical_hadamard(uint32_t qid, int N_steps, double H_amp) {
     if (qid >= logical_qubits.size()) return;
 
-    for (int step = 0; step < N_steps; ++step) {
-        // 2. Compute incremental IQ aligned to phase
-        // DO NOT rotate with phi
-        double i0 = H_amp * std::cos(M_PI/4);
-        double q0 = H_amp * std::sin(M_PI/4);
-
-
-
-        // 3. Find carrier tone for this logical qubit
-        int wid = logical_qubits[qid].waveform_id;
-        if (wid < 0 || wid >= (int)waveforms.size()) continue;
-
-        size_t carrier_idx = static_cast<size_t>(-1);
-        for (size_t i = 0; i < waveforms[wid].tones.size(); ++i) {
-            if (waveforms[wid].tones[i].logical_id == static_cast<int>(qid) &&
-                std::abs(waveforms[wid].tones[i].freq - allocated_carriers[qid]) < 1e-6) {
-                carrier_idx = i;
-                break;
-            }
-        }
-        if (carrier_idx == static_cast<size_t>(-1)) continue;
-
-        // 4. Apply IQ step
-        waveforms[wid].tones[carrier_idx].set_iq(i0, q0);
-
-        // 5. Compile waveform and advance one period
-        compile_to_physical_waveform();
-        run_periods(1);
-    }
-}
-
-// --------------------------------------------------------
-// Step-wise logical Hadamard (incremental, phase-aware)
-// --------------------------------------------------------
-void SpiralVM::logical_hadamard_step(uint32_t qid, double H_amp) {
-    // 2. Compute incremental I/Q amplitudes aligned to the phase
-    // DO NOT rotate with phi
-    double i0 = H_amp * std::cos(M_PI/4);
-    double q0 = H_amp * std::sin(M_PI/4);
-    
-
-
-    // 3. Find carrier tone for this logical qubit
     int wid = logical_qubits[qid].waveform_id;
-    if (wid < 0 || wid >= (int)waveforms.size()) return;
-
     size_t carrier_idx = static_cast<size_t>(-1);
+
     for (size_t i = 0; i < waveforms[wid].tones.size(); ++i) {
         if (waveforms[wid].tones[i].logical_id == static_cast<int>(qid) &&
             std::abs(waveforms[wid].tones[i].freq - allocated_carriers[qid]) < 1e-6) {
@@ -942,15 +891,76 @@ void SpiralVM::logical_hadamard_step(uint32_t qid, double H_amp) {
     }
     if (carrier_idx == static_cast<size_t>(-1)) return;
 
-    // 4. Apply incremental IQ
-    waveforms[wid].tones[carrier_idx].set_iq(i0, q0);
+    // Backup tone
+    Tone backup = waveforms[wid].tones[carrier_idx];
 
-    // 5. Compile waveform and advance one period
+    for (int step = 0; step < N_steps; ++step) {
+        // Get current unwrapped phase of this qubit
+        double current_phi = current_orbit_phase(qid);
+
+        // Drive phase = -current_phi → appears stationary in qubit frame
+        double drive_phase = -current_phi;
+
+        // 45° Hadamard axis in qubit frame: I = cos(π/4), Q = sin(π/4)
+        double i_drive = H_amp * std::cos(M_PI / 4.0);
+        double q_drive = H_amp * std::sin(M_PI / 4.0);
+
+        // Apply to tone
+        waveforms[wid].tones[carrier_idx].phase = drive_phase;
+        waveforms[wid].tones[carrier_idx].set_iq(1.0, 1.0);
+        waveforms[wid].tones[carrier_idx].amp *= H_amp;
+
+        compile_to_physical_waveform();
+        run_periods(1);
+    }
+
+    // Restore original tone
+    waveforms[wid].tones[carrier_idx] = backup;
+    compile_to_physical_waveform();
+
+    std::cout << "[H] Applied phase-locked Hadamard on q" << qid
+              << " (" << N_steps << " steps, amp=" << H_amp << ")\n";
+}
+
+// Single-step version (same logic)
+void SpiralVM::logical_hadamard_step(uint32_t qid, double H_amp) {
+    int wid = logical_qubits[qid].waveform_id;
+    size_t carrier_idx = static_cast<size_t>(-1);
+
+    for (size_t i = 0; i < waveforms[wid].tones.size(); ++i) {
+        if (waveforms[wid].tones[i].logical_id == static_cast<int>(qid) &&
+            std::abs(waveforms[wid].tones[i].freq - allocated_carriers[qid]) < 1e-6) {
+            carrier_idx = i;
+            break;
+        }
+    }
+    if (carrier_idx == static_cast<size_t>(-1)) return;
+
+    Tone backup = waveforms[wid].tones[carrier_idx];
+
+    double current_phi = current_orbit_phase(qid);
+    double drive_phase = -current_phi;
+
+    double iq_val = H_amp / std::sqrt(2.0);  // total drive magnitude = H_amp
+
+    waveforms[wid].tones[carrier_idx].phase = drive_phase;
+    waveforms[wid].tones[carrier_idx].set_iq(iq_val, iq_val);
+
     compile_to_physical_waveform();
     run_periods(1);
 
-}
+    waveforms[wid].tones[carrier_idx] = backup;
+    compile_to_physical_waveform();
 
+
+    // PULSE WITH NO SIDE EFFECTS
+    bool saved_auto = auto_compile_enabled;
+    //auto_compile_enabled = false;
+    compile_to_physical_waveform();
+    
+    std::cout << "[DEBUG] physical[0].amp=" << physical_waveform.tones[0].amp << "\n";
+    std::cout << "[DEBUG] physical[0].phase=" << physical_waveform.tones[0].phase << "\n";
+}
 
 
 
@@ -958,6 +968,7 @@ double SpiralVM::current_orbit_phase(uint32_t qid) const {
     if (qid >= logical_phase.size()) return 0.0;
     return logical_phase[qid];              // UNWRAPPED
 }
+
 inline double wrap_phase(double x) {
     const double two_pi = 2.0 * M_PI;
     x = std::fmod(x, two_pi);
@@ -1015,14 +1026,15 @@ void SpiralVM::logical_x_pulse(uint32_t qid, double duration_periods) {
     //waveforms[wid].tones[carrier_idx].amp = clamp_tone_amp(waveforms[wid].tones[carrier_idx].amp);
     std::cout << "[DEBUG] waveforms[wid].tones[carrier_idx].phase=" << waveforms[wid].tones[carrier_idx].phase << "\n";
 
+    // PULSE WITH NO SIDE EFFECTS
+    bool saved_auto = auto_compile_enabled;
+    //auto_compile_enabled = false;
     compile_to_physical_waveform();
     
     std::cout << "[DEBUG] physical[0].amp=" << physical_waveform.tones[0].amp << "\n";
     std::cout << "[DEBUG] physical[0].phase=" << physical_waveform.tones[0].phase << "\n";
     
-    // PULSE WITH NO SIDE EFFECTS
-    bool saved_auto = auto_compile_enabled;
-    auto_compile_enabled = false;
+    
     std::vector<int> pulse_drive_index = drive_index;  // capture -2's
     
     uint32_t steps = std::ceil(duration_periods);
@@ -1084,25 +1096,9 @@ void SpiralVM::logical_y_pulse(uint32_t qid, double duration_periods) {
     waveforms[wid].tones[carrier_idx].phase += wrap_phase(
         M_PI * (quasi > 0 ? 1.0 : -1.0) + M_PI * 0.5);
 
-    compile_to_physical_waveform();
-
     // PULSE WITH NO SIDE EFFECTS
     bool saved_auto = auto_compile_enabled;
-    auto_compile_enabled = false;
-    std::vector<int> pulse_drive_index = drive_index;
-
-    uint32_t steps = std::ceil(duration_periods);
-    for (uint32_t i = 0; i < steps; i++) {
-        double dummy_F = 0.0;
-        drive_index = pulse_drive_index;
-        step_period(current_period + i, dummy_F);
-    }
-
-    // CLEANUP
-    drive_index = saved_drive_index;
-    waveforms[wid].tones[carrier_idx].amp   = original_amp;
-    waveforms[wid].tones[carrier_idx].phase = wrap_phase(original_phase);
-    auto_compile_enabled = saved_auto;
+    //auto_compile_enabled = false;
     compile_to_physical_waveform();
 }
 
@@ -1232,14 +1228,14 @@ void SpiralVM::logical_z_rotation(uint32_t qid, double angle) {
     
     // Z = DETUNING (NOT amplitude!)
     waveforms[wid].tones[carrier_idx].freq += angle / (2.0 * M_PI);  // θ/T detuning
-    waveforms[wid].tones[carrier_idx].set_iq(10.0, 0.0);  // WEAK X-drive
+    waveforms[wid].tones[carrier_idx].set_iq(1.0, 0.0);  // WEAK X-drive
     
     compile_to_physical_waveform();
     run_periods(1.0);
     
     // RESTORE PERFECT X
     waveforms[wid].tones[carrier_idx].freq = saved_freq;
-    waveforms[wid].tones[carrier_idx].set_iq(LOGICAL_X_AMPLITUDE, 0.0);
+    waveforms[wid].tones[carrier_idx].set_iq(1.0, 0.0);
     compile_to_physical_waveform();
 }
 
@@ -1393,6 +1389,46 @@ arma::sp_cx_mat SpiralVM::hamiltonian_cl10_90_spiral_twist_inhomogeneous_y(doubl
     }
     return arma::sp_cx_mat(locations.submat(0,0,1,nz-1), values.subvec(0,nz-1), N_local*D, N_local*D);
 }
+
+
+arma::sp_cx_mat SpiralVM::hamiltonian_cl10_90_spiral_twist_inhomogeneous_XY(
+    double J, const std::vector<double> &local_hx,
+    const std::vector<double> &local_hy, double omega_ang)
+{
+    int N_local = rows * cols;
+    // Use a map to accumulate values at each unique (row, col)
+    std::map<std::pair<int, int>, std::complex<double>> value_map;
+
+    for (int i = 0; i < N_local; ++i) {
+        double hx = (i < (int)local_hx.size()) ? local_hx[i] : (h0 + h1 * cos(omega*(0.0/2.0)+M_PI/4.0));
+        double hy = (i < (int)local_hy.size()) ? local_hy[i] : 0.0;
+
+        // X-term: -hx * (|0><1| + |1><0|)
+        value_map[{i*D, i*D + 1}] += -hx;
+        value_map[{i*D + 1, i*D}] += -hx;
+
+        // Y-term: -hy * i * σ_y = -hy * i * ( |0><1| - |1><0| ) wait — correct σ_y contribution
+        // σ_y = 0 -i ; i 0  → off-diag: |0><1| → -i, |1><0| → +i
+        value_map[{i*D, i*D + 1}] += -std::complex<double>(0, hy);  // -i hy
+        value_map[{i*D + 1, i*D}] +=  std::complex<double>(0, hy);  // +i hy
+    }
+
+    // Now build locations and values from the map
+    int NNZ = value_map.size();
+    arma::umat locations(2, NNZ);
+    arma::cx_vec values(NNZ);
+    uint nz = 0;
+
+    for (const auto& entry : value_map) {
+        locations(0, nz) = entry.first.first;
+        locations(1, nz) = entry.first.second;
+        values(nz) = entry.second;
+        ++nz;
+    }
+
+    return arma::sp_cx_mat(locations, values, N_local*D, N_local*D);
+}
+
 
 // ---------- Edge-aware neighbor lookup ----------
 inline int SpiralVM::get_right_neighbor(int row, int col) const {

@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cassert>
+#include <utility> // For std::pair
+
 
 using namespace arma;
 using namespace std;
@@ -137,52 +139,65 @@ int SpiralVM::allocate_waveform_for_qubit(uint32_t qid) {
     return wid;
 }
 
+double SpiralVM::gaussian_envelope(double t, double duration, double sigma) {
+    // Sigma as a fraction of duration (usually 0.25)
+    double mid = duration / 2.0;
+    double s = duration * sigma;
+    return std::exp(-0.5 * std::pow((t - mid) / s, 2));
+}
 
-// Add this implementation to spiral_vm_core.cpp (place it near allocate_waveform_for_qubit or other setup functions)
-
-// Compilation to single physical (global multi-tone) waveform
 void SpiralVM::compile_to_physical_waveform() {
-    if (waveforms.empty()) { std::cerr << "[SpiralVM] No waveforms to compile\n"; return; }
+    if (waveforms.empty()) return;
 
-    // Use the global physical_waveform member - DON'T touch logical waveforms
     physical_waveform.tones.clear();
 
-    constexpr double freq_eps  = 1e-9;
+    constexpr double freq_eps = 1e-9;
     constexpr double phase_eps = 1e-9;
-    using Key = std::tuple<double,double,int>;
 
-    auto cmp = [freq_eps, phase_eps](const Key& a, const Key& b) {
-        if (std::abs(std::get<0>(a) - std::get<0>(b)) > freq_eps)
-            return std::get<0>(a) < std::get<0>(b);
-        if (std::abs(std::get<1>(a) - std::get<1>(b)) > phase_eps)
-            return std::get<1>(a) < std::get<1>(b);
-        return std::get<2>(a) < std::get<2>(b);
+    using Key = std::tuple<double, double, int>;
+
+    // Custom comparator as a struct (easier and more reliable than lambda in map ctor)
+    struct ToneKeyCompare {
+        bool operator()(const Key& a, const Key& b) const {
+            auto [freq_a, phase_a, id_a] = a;
+            auto [freq_b, phase_b, id_b] = b;
+            if (std::abs(freq_a - freq_b) > freq_eps) return freq_a < freq_b;
+            if (std::abs(phase_a - phase_b) > phase_eps) return phase_a < phase_b;
+            return id_a < id_b;
+        }
     };
 
-    std::map<Key, double, decltype(cmp)> tone_map(cmp);
+    // Use struct comparator — no lambda constructor issues
+    std::map<Key, std::tuple<double, double, double>, ToneKeyCompare> merge_map;
 
-    // Merge ALL waveforms → single physical (logical waveforms preserved)
+    // Accumulate amp, I*amp, Q*amp
     for (const auto& wf : waveforms) {
         for (const auto& tn : wf.tones) {
-            tone_map[{tn.freq, tn.phase, tn.logical_id}] += tn.amp;
+            Key key = {tn.freq, tn.phase, tn.logical_id};
+            auto& [total_amp, sum_I, sum_Q] = merge_map[key];
+            total_amp += tn.amp;
+            sum_I += tn.I_component * tn.amp;
+            sum_Q += tn.Q_component * tn.amp;
         }
     }
 
-    for (const auto& entry : tone_map) {
-        double freq  = std::get<0>(entry.first);
-        double phase = std::get<1>(entry.first);
-        int    qid   = std::get<2>(entry.first);
-        double amp   = clamp_tone_amp(entry.second);
-        physical_waveform.tones.emplace_back(amp, freq, phase, 0.0, 1.0, qid);
+    // Build physical tones with normalized I/Q
+    for (const auto& entry : merge_map) {
+        auto [freq, phase, qid] = entry.first;
+        auto [total_amp, sum_I, sum_Q] = entry.second;
+
+        double amp = clamp_tone_amp(total_amp);
+
+        double I = (amp > 1e-12) ? sum_I / total_amp : 0.0;
+        double Q = (amp > 1e-12) ? sum_Q / total_amp : 0.0;
+
+        double envelope = gaussian_envelope(0, 1);
+        physical_waveform.tones.emplace_back(amp * envelope, freq, phase, I, Q, 0.0, 1.0, qid);
     }
 
-    //std::fill(drive_index.begin(), drive_index.end(), -2);  // flag: use physical_waveform
-
-    cout << "[SpiralVM] Compiled " << waveforms.size() 
-         << " logical → 1 physical waveform (" << physical_waveform.tones.size() << " tones)\n";
+    cout << "[SpiralVM] Compiled to global hardware waveform: " 
+         << physical_waveform.tones.size() << " tones\n";
 }
-
-
 
 //For Which frequency addresses which logical qubit
 void SpiralVM::dump_frequency_mapping(const std::string& fname) const {
@@ -207,13 +222,13 @@ Waveform SpiralVM::make_default_logical_waveform(uint32_t qid) {
     double carrier = freq_base + qid * freq_spacing;  
     double amp = clamp_tone_amp(h1);        // main amplitude
     double phase = (qid % 2 ? M_PI/3 : -M_PI/3); // staggered initial phase per qubit
-    w.tones.push_back(Tone(amp, carrier, phase, 0.0, 1.0, qid));
+    w.tones.push_back(Tone(amp, carrier, phase, 1,1,0.0, 1.0, qid));
 
     // --- 2. Tiny orthogonal “helper” tone for crosstalk cancellation ---
     double helper_freq = carrier + 0.1*freq_spacing; 
     double helper_amp = clamp_tone_amp(0.02 * h1); // tiny amplitude
     double helper_phase = M_PI/4 + 0.1*qid;        // slight phase shift
-    w.tones.push_back(Tone(helper_amp, helper_freq, helper_phase, 0.0, 1.0, qid));
+    w.tones.push_back(Tone(helper_amp, helper_freq, helper_phase, 1,1,0.0, 1.0, qid));
 
     // --- 3. Low-pass / spectral cleanup ---
     lowpass_filter_waveform(w, lowpass_cutoff);
@@ -278,8 +293,8 @@ DriveXY SpiralVM::eval_waveform_xy(const Waveform &w, double t, double local_pha
         double arg = tn.freq * t + tn.phase + local_phase;
 
         // Standard IQ modulation (rotating frame)
-        out.hx += tn.I_component * cos(arg) - tn.Q_component * sin(arg);
-        out.hy += tn.I_component * sin(arg) + tn.Q_component * cos(arg);
+        out.hx += tn.amp * (tn.I_component * cos(arg) - tn.Q_component * sin(arg));
+        out.hy += tn.amp * (tn.I_component * sin(arg) + tn.Q_component * cos(arg));
     }
 
     return out;
@@ -605,7 +620,7 @@ void SpiralVM::virtual_phase_gate(uint32_t qid, double angle) {
 
 // Controlled phase gate — the most important two-qubit gate
 // Implements a hardware-like entangling gate by temporarily applying
-// an interaction waveform (carriers + beat/interaction tone) to both qubit neighborhoods.
+// an interaction waveform (carriers + beat/i laready ran with 150 max and it gave me the out put aboveinteraction tone) to both qubit neighborhoods.
 // No mid-circuit measurement or feedforward — entanglement arises from the drive-mediated interaction.
 void SpiralVM::logical_controlled_phase(uint32_t control, uint32_t target,
                                         double max_angle, double duration_periods) {
@@ -907,7 +922,7 @@ void SpiralVM::logical_hadamard(uint32_t qid, int N_steps, double H_amp) {
 
         // Apply to tone
         waveforms[wid].tones[carrier_idx].phase = drive_phase;
-        waveforms[wid].tones[carrier_idx].set_iq(1.0, 1.0);
+        waveforms[wid].tones[carrier_idx].set_iq(i_drive, q_drive);
         waveforms[wid].tones[carrier_idx].amp *= H_amp;
 
         compile_to_physical_waveform();
@@ -922,7 +937,58 @@ void SpiralVM::logical_hadamard(uint32_t qid, int N_steps, double H_amp) {
               << " (" << N_steps << " steps, amp=" << H_amp << ")\n";
 }
 
+inline double wrap_phase(double x) {
+    const double two_pi = 2.0 * M_PI;
+    x = std::fmod(x, two_pi);
+    if (x < -M_PI) x += two_pi;
+    if (x >  M_PI) x -= two_pi;
+    return x;
+}
+
+
+
+/**
+ * @brief Calculates the I and Q drive components by summing a fundamental 
+ *        frequency and specified sub-harmonics.
+ * 
+ * @param t_current The current time value (equivalent to current_period in your snippets).
+ * @param T_base The base period T of the fundamental frequency.
+ * @param num_harmonics The number of sub-harmonics to include (e.g., 3 for 0.5x, 0.25x, 0.125x).
+ * @return std::pair<double, double> A pair where the first element is i_drive and the second is q_drive.
+ */
+std::pair<double, double> generate_harmonic_iq_drive(double t_current, double T_base, int num_harmonics) {
+    if (T_base == 0.0) {
+        return {0.0, 0.0};
+    }
+
+    // Calculate the base angular frequency (omega)
+    const double omega_base = 2.0 * M_PI / T_base;
+
+    double i_drive = 0.0;
+    double q_drive = 0.0;
+
+    // We sum the fundamental (n=0) and subsequent sub-harmonics (n=1, 2, ...)
+    for (int n = 0; n <= num_harmonics; ++n) {
+        // The frequency for the n-th term is base_freq / 2^n
+        // The weight (amplitude scaling) for the n-th term is 1 / 2^n
+        double freq_factor = std::pow(2.0, n);
+        double weight = 1.0 / freq_factor;
+        double current_omega = omega_base / freq_factor;
+
+        // Calculate the argument for sin and cos
+        double arg = t_current * current_omega;
+
+        // Accumulate I and Q components
+        i_drive += weight * std::sin(arg);
+        q_drive += weight * std::cos(arg);
+    }
+
+    return {i_drive, q_drive};
+}
+
+
 // Single-step version (same logic)
+
 void SpiralVM::logical_hadamard_step(uint32_t qid, double H_amp) {
     int wid = logical_qubits[qid].waveform_id;
     size_t carrier_idx = static_cast<size_t>(-1);
@@ -941,26 +1007,46 @@ void SpiralVM::logical_hadamard_step(uint32_t qid, double H_amp) {
     double current_phi = current_orbit_phase(qid);
     double drive_phase = -current_phi;
 
-    double iq_val = H_amp / std::sqrt(2.0);  // total drive magnitude = H_amp
+    int num_subharmonics = 5; // For 1x, 0.5x, 0.25x, 0.125x frequencies
 
-    waveforms[wid].tones[carrier_idx].phase = drive_phase;
-    waveforms[wid].tones[carrier_idx].set_iq(iq_val, iq_val);
+    std::pair<double, double> iq_components = generate_harmonic_iq_drive(
+        static_cast<double>(current_period), // Use current time/period variable here
+        static_cast<double>(T),              // Use your T variable here
+        num_subharmonics
+    );
 
-    compile_to_physical_waveform();
+    // 45° Hadamard axis in qubit frame: I = cos(π/4), Q = sin(π/4)
+    double i_drive = 1.5 *M_PI* iq_components.first ;//*std::cos(M_PI/4);
+    double q_drive = 1.5 *M_PI* iq_components.second;
+    
+    double quasi = is_ang ? (sin(omega * current_period) + sin(2*omega * current_period)) : 0.0;
+    waveforms[wid].tones[carrier_idx].phase += drive_phase + wrap_phase(M_PI * (quasi > 0 ? 1.0 : -1.0));
+    waveforms[wid].tones[carrier_idx].set_iq(i_drive, q_drive);
+    waveforms[wid].tones[carrier_idx].amp *= 1 / std::sqrt(2);
+
     run_periods(1);
 
     waveforms[wid].tones[carrier_idx] = backup;
-    compile_to_physical_waveform();
-
-
-    // PULSE WITH NO SIDE EFFECTS
-    bool saved_auto = auto_compile_enabled;
-    //auto_compile_enabled = false;
-    compile_to_physical_waveform();
-    
+    //compile_to_physical_waveform();
     std::cout << "[DEBUG] physical[0].amp=" << physical_waveform.tones[0].amp << "\n";
     std::cout << "[DEBUG] physical[0].phase=" << physical_waveform.tones[0].phase << "\n";
 }
+
+
+// logical Hadamard on single qubit
+/*
+void SpiralVM::logical_hadamard_step(uint32_t qid, double H_amp) {
+    if (qid >= logical_qubits.size()) return;
+
+    // Z(π/2) only on target neighborhood
+    logical_phase_ramp(qid, M_PI/2.0, 1);  // ramp over 1 periods
+
+    // Global X
+    logical_x_pulse(qid, 1);
+
+    // Z(-π/2) on target
+    logical_phase_ramp(qid, -M_PI/2.0, 1);
+}*/
 
 
 
@@ -968,15 +1054,6 @@ double SpiralVM::current_orbit_phase(uint32_t qid) const {
     if (qid >= logical_phase.size()) return 0.0;
     return logical_phase[qid];              // UNWRAPPED
 }
-
-inline double wrap_phase(double x) {
-    const double two_pi = 2.0 * M_PI;
-    x = std::fmod(x, two_pi);
-    if (x < -M_PI) x += two_pi;
-    if (x >  M_PI) x -= two_pi;
-    return x;
-}
-
 
 // Applies a logical X (pi rotation) to the specified qubit by temporarily boosting the amplitude
 // of its main carrier tone to induce a strong transverse field pulse over a calibrated duration.
@@ -1158,19 +1235,14 @@ double SpiralVM::measure_logical_X(uint32_t qid) const {
             std::complex<double> psi1 = phi(i * D + 1, 0);
             
             // Standard ⟨X⟩ coherence term
-            double site_x = 2.0 * std::real(std::conj(psi0) * psi1);
+            double site_x = N * std::real(std::conj(psi0) * psi1);  // Add N factor
             
-            // CORRECT Staggered sign: flip site_x locally for Néel order
-            if ((row + col) % 2 == 1) {
-                total_x -= site_x;
-            } else {
-                total_x += site_x;
-            }
+            total_x += site_x;
             ++count;
         }
     }
     // Average across the neighborhood to get the logical value
-    return (count > 0) ? total_x / count : 0.0;
+    return (count > 0) ? total_x / (double)count : 0.0;
 }
 
 

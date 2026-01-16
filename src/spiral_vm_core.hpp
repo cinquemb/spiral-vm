@@ -23,11 +23,11 @@ struct Tone {
     int logical_id;   
 
     // Standard Constructor: Maps 'a' to 'amp' and 'I' for legacy compatibility
-    Tone(double a=0, double f=0, double p=0, double s=0, double e=1.0, int q=-1)
+    Tone(double a=0, double f=0, double p=0, double i=0, double q=0,double s=0, double e=1.0, int lid=-1)
         : amp(a), freq(f), phase(p),
-          I_component(a), Q_component(0.0), // Defaults to pure I-drive
+          I_component(i), Q_component(q), // Defaults to pure I-drive
           envelope_start(s), envelope_end(e),
-          logical_id(q) {}
+          logical_id(lid) {}
           
     // Direct IQ Helper: Use this for Hadamard and CZ gates
     void set_iq(double i, double q) {
@@ -226,6 +226,7 @@ private:
     // Private methods: physics calculations, Floquet step
     void step_period(int n, double& delta_F);
 
+    double gaussian_envelope(double t, double duration, double sigma = 0.25);
     // Waveform helpers
     int allocate_waveform_for_qubit(uint32_t qid);
     Waveform make_default_logical_waveform(uint32_t qid);

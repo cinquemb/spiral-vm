@@ -300,29 +300,6 @@ DriveXY SpiralVM::eval_waveform_xy(const Waveform &w, double t, double local_pha
     return out;
 }
 
-
-// evaluate waveform with optional local envelope-handling (period fraction ignored for now)
-double SpiralVM::eval_waveform_with_envelope(const Waveform &w,
-                                             double t,
-                                             double local_phase) const {
-    double physical_field = 0.0;
-
-    for (const auto &tn : w.tones) {
-        // The phase argument includes frequency, fixed phase, and the Floquet local phase
-        double arg = tn.freq * t + tn.phase + local_phase;
-
-        // I and Q are the quadrature amplitudes
-        double I = tn.amp * tn.I_component;
-        double Q = tn.amp * tn.Q_component;
-
-        // This is the standard IQ modulation formula
-        // It produces the actual oscillating wave required for resonance
-        physical_field += I * std::cos(arg) - Q * std::sin(arg);
-    }
-
-    return physical_field;
-}
-
 // ---------- Add logical qubit ----------
 uint32_t SpiralVM::add_qubit(uint32_t x, uint32_t y) {
     LogicalQubit q;
@@ -669,43 +646,6 @@ int SpiralVM::find_waveform_index_for_qubit(uint32_t qid) {
 }
 
 
-// ---------- Floquet runner / logging ----------
-void SpiralVM::run_floquet(int N_max, const string& initial_state) {
-    // simple wrapper that writes CSV file similar to your earlier code
-    ofstream fout;
-    stringstream fname;
-    fname << "dtc_floquet_with_" << initial_state << "_state_" << (is_ang ? "_spiral_" : "_no_spiral_") << (int)sx_gain << "_omega_" << (int)omega << ".txt";
-    fout.open(fname.str());
-    fout << "Period,Fidelity,Stabilizer,Energy,sx_energy,zz_energy,Delta_F,ht_eff_end,sx_avg\n";
-
-    double delta_F = 0.0;
-    // initial energies:
-    sp_cx_mat H_init = hamiltonian_cl10_90_spiral_twist(J, 0, 0);
-    cx_mat Hphi_init = mat_vec_mult_cl10(H_init, phi);
-    double energy_init = real(inner_product_cl10(phi, Hphi_init)) + compute_zz_energy_edgeaware(phi, J, 0, 0);
-    double zz_energy_init = compute_zz_energy_edgeaware(phi, J, 0, 0);
-    double sx_energy_init = 0.0;
-    for (int i = 0; i < N; i++) {
-        sx_energy_init -= h1 * 2.0 * real(phi(i * D, 0) * conj(phi(i * D + 1, 0)));
-    }
-    fout << "0,1.0," << compute_avg_stabilizer(phi) << "," << energy_init << "," << sx_energy_init << "," << zz_energy_init << "," << h1 << ",0,0\n";
-
-    for (int n = 0; n < N_max; n++) {
-        step_period(n, delta_F);
-
-        double sx_energy = 0.0;
-        for (int i = 0; i < N; i++) {
-            sx_energy -= 2.0 * h1 * real(phi(i * D, 0) * conj(phi(i * D + 1, 0)));
-        }
-        double zz_energy = is_ang ? compute_zz_energy_edgeaware(phi, J, omega_ang_end(n), n + 1, true) : compute_zz_energy_edgeaware(phi, J, 0, 0);
-        double energy = sx_energy + zz_energy;
-
-        fout << n + 1 << "," << fidelities[n + 1] << "," << compute_avg_stabilizer(phi) << "," << energy << "," << sx_energy << "," << zz_energy << "," << delta_F << "," << h_effective_end(n) << "," << sx_avg(n) << "\n";
-        cout << "Period " << n + 1 << ": Fidelity = " << fidelities[n + 1] << ", Energy = " << energy << "\n";
-    }
-    fout.close();
-}
-
 void SpiralVM::step_period(int n, double &delta_F) {
     double dt = T / steps;
     cx_mat phi_new = phi;
@@ -845,51 +785,6 @@ void SpiralVM::run_periods(uint32_t N_periods) {
 
 // ---------- logical measurements and gates ----------
 
-
-void SpiralVM::logical_hadamard_tune(uint32_t qid) {
-    int wid = logical_qubits[qid].waveform_id;
-    size_t carrier_idx = 0;
-    
-    // Find carrier
-    for (size_t i = 0; i < waveforms[wid].tones.size(); ++i) {
-        if (waveforms[wid].tones[i].logical_id == static_cast<int>(qid)) {
-            carrier_idx = i; break;
-        }
-    }
-    
-    double best_x = 0.0;
-    double best_amp = 0.0, best_q = 0.0;
-    
-    // GRID SEARCH: amp, Q-phase
-    for (double amp = 60; amp <= 130; amp += 5) {
-        for (double q_phase = 0.5; q_phase <= 1.5; q_phase += 0.1) {
-            // SAVE STATE
-            double saved_i = waveforms[wid].tones[carrier_idx].I_component;
-            double saved_q = waveforms[wid].tones[carrier_idx].Q_component;
-            
-            // TEST H
-            waveforms[wid].tones[carrier_idx].set_iq(1.0, 1.0);
-            compile_to_physical_waveform();
-            run_periods(1.0);
-            
-            double x_meas = measure_logical_X(qid);
-            printf("amp=%.1f q=%.2f → X=%.4f\n", amp, q_phase, x_meas);
-            
-            if (x_meas > best_x) {
-                best_x = x_meas; best_amp = amp; best_q = q_phase;
-            }
-            
-            // RESTORE
-            waveforms[wid].tones[carrier_idx].set_iq(saved_i, saved_q);
-            compile_to_physical_waveform();
-        }
-    }
-    
-    printf("*** BEST HADAMARD: amp=%.1f q=%.2f → X=%.4f ***\n", 
-           best_amp, best_q, best_x);
-}
-
-
 // Full logical Hadamard: N_steps incremental locked rotations
 void SpiralVM::logical_hadamard(uint32_t qid, int N_steps, double H_amp) {
     if (qid >= logical_qubits.size()) return;
@@ -1017,24 +912,6 @@ void SpiralVM::logical_hadamard_step(uint32_t qid, double H_amp, int num_subharm
     std::cout << "[DEBUG] physical[0].phase=" << physical_waveform.tones[0].phase << "\n";
 }
 
-
-// logical Hadamard on single qubit
-/*
-void SpiralVM::logical_hadamard_step(uint32_t qid, double H_amp) {
-    if (qid >= logical_qubits.size()) return;
-
-    // Z(π/2) only on target neighborhood
-    logical_phase_ramp(qid, M_PI/2.0, 1);  // ramp over 1 periods
-
-    // Global X
-    logical_x_pulse(qid, 1);
-
-    // Z(-π/2) on target
-    logical_phase_ramp(qid, -M_PI/2.0, 1);
-}*/
-
-
-
 double SpiralVM::current_orbit_phase(uint32_t qid) const {
     if (qid >= logical_phase.size()) return 0.0;
     return logical_phase[qid];              // UNWRAPPED
@@ -1147,8 +1024,6 @@ void SpiralVM::logical_y_pulse(uint32_t qid, double duration_periods) {
     //auto_compile_enabled = false;
     compile_to_physical_waveform();
 }
-
-
 
 void SpiralVM::logical_Z(uint32_t qid, double angle) {
     if (qid >= logical_phase.size()) return;
@@ -1391,46 +1266,6 @@ arma::sp_cx_mat SpiralVM::hamiltonian_cl10_90_spiral_twist(double J, double ht, 
     compute_nonzero_indices_spiral_twist(J, ht, rows, cols, D, omega_ang, locations, values, nz);
     return arma::sp_cx_mat(locations.submat(0,0,1,nz-1), values.subvec(0,nz-1), N_local*D, N_local*D);
 }
-
-// new: inhomogeneous transverse field Hamiltonian
-arma::sp_cx_mat SpiralVM::hamiltonian_cl10_90_spiral_twist_inhomogeneous(double J, const std::vector<double> &local_hx, double omega_ang) {
-    int N_local = rows * cols;
-    // We construct sigma_x terms with per-site coefficients.
-    // Each physical site i contributes -hx_i * (|0><1| + |1><0|)
-    // plus we keep ZZ terms out of this routine (handled separately via compute_zz_energy_vector)
-    // Build sparse matrix entries for all |0><1| and |1><0|
-    int NNZ = 2 * N_local;
-    arma::umat locations(2, NNZ);
-    arma::cx_vec values(NNZ);
-    uint nz = 0;
-    for (int i = 0; i < N_local; ++i) {
-        double hx = (i < (int)local_hx.size()) ? local_hx[i] : (h0 + h1 * cos(omega * (0.0/2.0) + M_PI/4.0));
-        // off-diagonal entries:
-        locations(0, nz) = i*D; locations(1, nz) = i*D + 1; values(nz) = -hx; nz++;
-        locations(0, nz) = i*D + 1; locations(1, nz) = i*D; values(nz) = -hx; nz++;
-    }
-    return arma::sp_cx_mat(locations.submat(0,0,1,nz-1), values.subvec(0,nz-1), N_local*D, N_local*D);
-}
-
-arma::sp_cx_mat SpiralVM::hamiltonian_cl10_90_spiral_twist_inhomogeneous_y(double J, const std::vector<double> &local_hy, double omega_ang) {
-    int N_local = rows * cols;
-    // We construct sigma_y terms with per-site coefficients.
-    // Each physical site i contributes -hy_i * (|0><1| + |1><0|)
-    // plus we keep ZZ terms out of this routine (handled separately via compute_zz_energy_vector)
-    // Build sparse matrix entries for all |0><1| and |1><0|
-    int NNZ = 2 * N_local;
-    arma::umat locations(2, NNZ);
-    arma::cx_vec values(NNZ);
-    uint nz = 0;
-    for (int i = 0; i < N_local; ++i) {
-        double hy = (i < (int)local_hy.size()) ? local_hy[i] : 0;
-        // off-diagonal entries:
-        locations(0, nz) = i*D; locations(1, nz) = i*D + 1; values(nz) = -hy; nz++;
-        locations(0, nz) = i*D + 1; locations(1, nz) = i*D; values(nz) = -hy; nz++;
-    }
-    return arma::sp_cx_mat(locations.submat(0,0,1,nz-1), values.subvec(0,nz-1), N_local*D, N_local*D);
-}
-
 
 arma::sp_cx_mat SpiralVM::hamiltonian_cl10_90_spiral_twist_inhomogeneous_XY(
     double J, const std::vector<double> &local_hx,

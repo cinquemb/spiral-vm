@@ -894,45 +894,30 @@ void SpiralVM::logical_hadamard_tune(uint32_t qid) {
 void SpiralVM::logical_hadamard(uint32_t qid, int N_steps, double H_amp) {
     if (qid >= logical_qubits.size()) return;
 
-    int wid = logical_qubits[qid].waveform_id;
-    size_t carrier_idx = static_cast<size_t>(-1);
+    //ideally min 200 steps with settings below
 
-    for (size_t i = 0; i < waveforms[wid].tones.size(); ++i) {
-        if (waveforms[wid].tones[i].logical_id == static_cast<int>(qid) &&
-            std::abs(waveforms[wid].tones[i].freq - allocated_carriers[qid]) < 1e-6) {
-            carrier_idx = i;
-            break;
+    double K_min_large = 1.0;          // minimum K for large grids
+    double K_max_2x2 = 60.0;     // maximum K for 2x2
+    double x0 = 25.0;                    // sigmoid midpoint
+    double steepness = 0.02;              // sigmoid steepness
+
+    double rows_cols = static_cast<double>(rows * cols);  // ensure floating-point
+    double max_K_mult = K_min_large + (K_max_2x2 - K_min_large) / (1.0 + std::exp(steepness * (rows_cols - x0)));
+
+    int max_K = 25*max_K_mult;  // full-force early
+    int min_K = 5;   // later-stage micro-steps
+
+    for (int step = 0; step < N_steps; step++){
+        // ramp K down as step increases
+        int K = max_K - (max_K - min_K) * step / N_steps;
+        K = std::max(K, min_K);
+
+        for (int k = 0; k < K; ++k){
+            logical_x_pulse(qid, 1.0);           // full X kick
+            logical_hadamard_step(qid, H_amp, 5); // 5 subharmonics
+            logical_z_rotation(qid, M_PI);       // full Z correction
         }
     }
-    if (carrier_idx == static_cast<size_t>(-1)) return;
-
-    // Backup tone
-    Tone backup = waveforms[wid].tones[carrier_idx];
-
-    for (int step = 0; step < N_steps; ++step) {
-        // Get current unwrapped phase of this qubit
-        double current_phi = current_orbit_phase(qid);
-
-        // Drive phase = -current_phi → appears stationary in qubit frame
-        double drive_phase = -current_phi;
-
-        // 45° Hadamard axis in qubit frame: I = cos(π/4), Q = sin(π/4)
-        double i_drive = H_amp * std::cos(M_PI / 4.0);
-        double q_drive = H_amp * std::sin(M_PI / 4.0);
-
-        // Apply to tone
-        waveforms[wid].tones[carrier_idx].phase = drive_phase;
-        waveforms[wid].tones[carrier_idx].set_iq(i_drive, q_drive);
-        waveforms[wid].tones[carrier_idx].amp *= H_amp;
-
-        compile_to_physical_waveform();
-        run_periods(1);
-    }
-
-    // Restore original tone
-    waveforms[wid].tones[carrier_idx] = backup;
-    compile_to_physical_waveform();
-
     std::cout << "[H] Applied phase-locked Hadamard on q" << qid
               << " (" << N_steps << " steps, amp=" << H_amp << ")\n";
 }

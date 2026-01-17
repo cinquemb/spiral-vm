@@ -4,9 +4,9 @@
 #include <cmath>
 
 int main() {
-    const int rows = 30;
-    const int cols = 30;
-    const int N_steps = 175;       // incremental Hadamard steps, this is my warp limit, beyond this i next
+    const int rows = 15;
+    const int cols = 15;
+    const int N_steps = 200;       // incremental Hadamard steps, this is my warp limit, beyond this i next
     const double tol = 1e-3;      // convergence tolerance for X_norm
     const int max_iters = 1;     // bisection iterations
 
@@ -18,7 +18,7 @@ int main() {
     SpiralVM vm(rows, cols);
     vm.is_ang = true;
     vm.initialize_state("neel");
-    uint32_t q0 = vm.add_qubit(15, 15);
+    uint32_t q0 = vm.add_qubit((int)(rows/2), (int)(cols/2));
 
     auto Z = [&vm](uint32_t id){ return vm.measure_logical_Z(id); };
     auto X = [&vm](uint32_t id){ return vm.measure_logical_X(id); };
@@ -40,12 +40,37 @@ int main() {
         //vm.logical_x_pulse(q0, 1.0);
         // vm.logical_y_pulse(q0, 1.0);
 
-        int K = 25; // or ramp: 1 + step/100
+        /*
+        int K = 20; // or ramp: 1 + step/100
         for (int k = 0; k < K; ++k){
             vm.logical_x_pulse(q0, 1.0);
             vm.logical_hadamard_step(q0, best_H, 5); // 5 subharmonics per micro-step
             vm.logical_z_rotation(q0, M_PI);
+        }*/
+
+
+        double K_min_large = 1.0;          // minimum K for large grids
+        double K_max_2x2 = 60.0;     // maximum K for 2x2
+        double x0 = 25.0;                    // sigmoid midpoint
+        double steepness = 0.02;              // sigmoid steepness
+
+        double rows_cols = static_cast<double>(vm.rows * vm.cols);  // ensure floating-point
+        double max_K_mult = K_min_large + (K_max_2x2 - K_min_large) / (1.0 + std::exp(steepness * (rows_cols - x0)));
+
+
+        int max_K = 25 * max_K_mult;  // full-force early
+        int min_K = 5;   // later-stage micro-steps
+
+        // ramp K down as step increases
+        int K = max_K - (max_K - min_K) * step / N_steps;
+        K = std::max(K, min_K);
+
+        for (int k = 0; k < K; ++k){
+            vm.logical_x_pulse(q0, 1.0);           // full X kick
+            vm.logical_hadamard_step(q0, best_H, 5); // 5 subharmonics
+            vm.logical_z_rotation(q0, M_PI);       // full Z correction
         }
+
 
 
 

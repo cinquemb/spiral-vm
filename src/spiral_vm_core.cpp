@@ -1098,7 +1098,7 @@ void SpiralVM::logical_x_pulse(uint32_t qid, double duration_periods) {
 
     // BOOST + ORBIT ALIGN (1 extra line!)
     double quasi = is_ang ? (sin(omega * current_period) + sin(2*omega * current_period)) : 0.0;
-    waveforms[wid].tones[carrier_idx].amp *= LOGICAL_X_AMPLITUDE * cos(2.0 * current_period * M_PI/(512*T));
+    waveforms[wid].tones[carrier_idx].amp *= duration_periods * cos(2.0 * current_period * M_PI/(512*T));
     waveforms[wid].tones[carrier_idx].phase += wrap_phase(M_PI * (quasi > 0 ? 1.0 : -1.0));
     //waveforms[wid].tones[carrier_idx].amp = clamp_tone_amp(waveforms[wid].tones[carrier_idx].amp);
     std::cout << "[DEBUG] waveforms[wid].tones[carrier_idx].phase=" << waveforms[wid].tones[carrier_idx].phase << "\n";
@@ -1106,8 +1106,7 @@ void SpiralVM::logical_x_pulse(uint32_t qid, double duration_periods) {
 
     //std::cout << "[DEBUG] physical[0].amp=" << physical_waveform.tones[0].amp << "\n";
     //std::cout << "[DEBUG] physical[0].phase=" << physical_waveform.tones[0].phase << "\n";
-    uint32_t steps = std::ceil(duration_periods);
-    run_periods(steps);
+    run_periods(1);
     
     // CLEANUP
     drive_index = saved_drive_index;
@@ -1151,7 +1150,7 @@ void SpiralVM::logical_y_pulse(uint32_t qid, double duration_periods) {
     double quasi = is_ang ? (sin(omega * current_period) + sin(2*omega * current_period)) : 0.0;
 
     waveforms[wid].tones[carrier_idx].amp *=
-        LOGICAL_X_AMPLITUDE * cos(2.0 * current_period * M_PI / (512 * T));
+        duration_periods * cos(2.0 * current_period * M_PI / (512 * T));
 
     // X used: phase += π * sign(quasi)
     // Y uses: phase += π * sign(quasi) + π/2

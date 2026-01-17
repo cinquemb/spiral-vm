@@ -6,13 +6,30 @@
 int main() {
     const int rows = 30;
     const int cols = 30;
-    const int N_steps = 2000;       // incremental Hadamard steps
+    const int N_steps = 428;       // incremental Hadamard steps, this is my warp limit, beyond this i next
     const double tol = 1e-3;      // convergence tolerance for X_norm
     const int max_iters = 1;     // bisection iterations
 
     double H_min = 1;          // min candidate amplitude
     double H_max = 1;         // max candidate amplitude
     double best_H = H_min;
+
+    /*
+
+     python3 anaylze.py 
+Closest saddle-like region around step: 377
+Jacobian:
+[[ 9.96369490e-01 -1.30722496e-04]
+ [ 8.84646594e-02  1.00362607e+00]]
+Eigenvalues: [0.99873281 1.00126275]
+Spectral radius: 1.0012627499954774
+
+Suggested constant bias (dZ, dX): [ 0.00013072 -0.00362607]
+Interpretation:
+  logical_z_rotation ≈ u[0]
+  logical_x_pulse    ≈ u[1]
+
+*/
 
     /*
     // Calibration loop: find H_amp that rotates X to ~1
@@ -68,7 +85,6 @@ int main() {
 
     vm.logical_x_pulse(q0, 1);
     vm.logical_x_pulse(q0, 1);
-    vm.LOGICAL_X_AMPLITUDE /=1.0;
 
     std::cout << "\n=== Step-by-step Hadamard with H_amp=" << best_H << " ===\n";
     std::cout << "Step |    Z    |    X    | X_norm\n";
@@ -78,14 +94,32 @@ int main() {
     for (int step = 0; step < N_steps; ++step) {
         //435 is absolut bottom in x norm
 
+        //250-275
 
-        if (step > 350)
-            vm.logical_z_rotation(q0, M_PI);
-        
+        if (step > -1) {
+            vm.logical_z_rotation(q0, 1.3e-4);
+            vm.logical_x_pulse(q0, -3.6e-3);
+        }
+
+
+        double bias = 0.0;
+
+        if (step > 9000) {
+        //if (step > 250) {
+            // smooth ramp from 0 → 1 over ~185 steps
+            bias = std::min(1.0, (step - 250) / 185.0);
+        }
+
+        // fractional asymmetric structure
+        if (bias > 0.0) {
+            vm.logical_z_rotation(q0, bias * (M_PI / 8.0));   // gentle tilt
+        }
+
         vm.logical_hadamard_step(q0, best_H, 5);
 
-        //if ((step % 2) == 0)
-            vm.logical_x_pulse(q0, 1.0);
+        if (bias > 0.0) {
+            vm.logical_x_pulse(q0, 0.3 * bias);              // biased drift
+        }
 
 
             /*

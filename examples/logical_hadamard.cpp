@@ -6,7 +6,7 @@
 int main() {
     const int rows = 30;
     const int cols = 30;
-    const int N_steps = 500;       // incremental Hadamard steps
+    const int N_steps = 2000;       // incremental Hadamard steps
     const double tol = 1e-3;      // convergence tolerance for X_norm
     const int max_iters = 1;     // bisection iterations
 
@@ -68,13 +68,44 @@ int main() {
 
     vm.logical_x_pulse(q0, 1);
     vm.logical_x_pulse(q0, 1);
+    vm.LOGICAL_X_AMPLITUDE /=1.0;
 
     std::cout << "\n=== Step-by-step Hadamard with H_amp=" << best_H << " ===\n";
     std::cout << "Step |    Z    |    X    | X_norm\n";
     std::cout << "--------------------------------\n";
+    int kick_count = 0;
 
     for (int step = 0; step < N_steps; ++step) {
-        vm.logical_hadamard_step(q0, best_H);
+        //435 is absolut bottom in x norm
+
+
+        if (step > 350)
+            vm.logical_z_rotation(q0, M_PI);
+        
+        vm.logical_hadamard_step(q0, best_H, 5);
+
+        //if ((step % 2) == 0)
+            vm.logical_x_pulse(q0, 1.0);
+
+
+            /*
+        if (step < 370){
+            vm.logical_hadamard_step(q0, best_H, 5);
+
+        } else if(step < 850){
+            //vm.logical_x_pulse(q0, 1);
+            //vm.logical_hadamard_step(q0, best_H, 5);
+            vm.logical_z_rotation(q0, M_PI);
+            vm.logical_x_pulse(q0, 1.0);
+        } else {
+
+            vm.logical_z_rotation(q0, M_PI);
+            vm.logical_hadamard_step(q0, best_H, 1);
+            vm.logical_x_pulse(q0, 1.0);
+            vm.logical_hadamard_step(q0, best_H, 1);  // Auto-inverse!
+            vm.logical_z_rotation(q0, -M_PI);
+
+        }*/
 
         double X_now = X(q0);
         double Z_now = Z(q0);

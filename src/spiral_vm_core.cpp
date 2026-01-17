@@ -989,7 +989,7 @@ std::pair<double, double> generate_harmonic_iq_drive(double t_current, double T_
 
 // Single-step version (same logic)
 
-void SpiralVM::logical_hadamard_step(uint32_t qid, double H_amp) {
+void SpiralVM::logical_hadamard_step(uint32_t qid, double H_amp, int num_subharm) {
     int wid = logical_qubits[qid].waveform_id;
     size_t carrier_idx = static_cast<size_t>(-1);
 
@@ -1007,7 +1007,7 @@ void SpiralVM::logical_hadamard_step(uint32_t qid, double H_amp) {
     double current_phi = current_orbit_phase(qid);
     double drive_phase = -current_phi;
 
-    int num_subharmonics = 5; // For 1x, 0.5x, 0.25x, 0.125x frequencies
+    int num_subharmonics = num_subharm;
 
     std::pair<double, double> iq_components = generate_harmonic_iq_drive(
         static_cast<double>(current_period), // Use current time/period variable here
@@ -1016,8 +1016,8 @@ void SpiralVM::logical_hadamard_step(uint32_t qid, double H_amp) {
     );
 
     // 45° Hadamard axis in qubit frame: I = cos(π/4), Q = sin(π/4)
-    double i_drive = 1.5 *M_PI* iq_components.first ;//*std::cos(M_PI/4);
-    double q_drive = 1.5 *M_PI* iq_components.second;
+    double i_drive = 2 *M_PI* iq_components.first ;//*std::cos(M_PI/4);
+    double q_drive = 2 *M_PI* iq_components.second;
     
     double quasi = is_ang ? (sin(omega * current_period) + sin(2*omega * current_period)) : 0.0;
     waveforms[wid].tones[carrier_idx].phase += drive_phase + wrap_phase(M_PI * (quasi > 0 ? 1.0 : -1.0));
@@ -1103,30 +1103,15 @@ void SpiralVM::logical_x_pulse(uint32_t qid, double duration_periods) {
     //waveforms[wid].tones[carrier_idx].amp = clamp_tone_amp(waveforms[wid].tones[carrier_idx].amp);
     std::cout << "[DEBUG] waveforms[wid].tones[carrier_idx].phase=" << waveforms[wid].tones[carrier_idx].phase << "\n";
 
-    // PULSE WITH NO SIDE EFFECTS
-    bool saved_auto = auto_compile_enabled;
-    //auto_compile_enabled = false;
-    compile_to_physical_waveform();
-    
-    std::cout << "[DEBUG] physical[0].amp=" << physical_waveform.tones[0].amp << "\n";
-    std::cout << "[DEBUG] physical[0].phase=" << physical_waveform.tones[0].phase << "\n";
-    
-    
-    std::vector<int> pulse_drive_index = drive_index;  // capture -2's
-    
+
+    //std::cout << "[DEBUG] physical[0].amp=" << physical_waveform.tones[0].amp << "\n";
+    //std::cout << "[DEBUG] physical[0].phase=" << physical_waveform.tones[0].phase << "\n";
     uint32_t steps = std::ceil(duration_periods);
-    for(uint32_t i = 0; i < steps; i++) {
-        double dummy_F = 0.0;
-        drive_index = pulse_drive_index;  // FORCE -2 every step!
-        step_period(current_period + i, dummy_F);  
-    }
+    run_periods(steps);
     
     // CLEANUP
     drive_index = saved_drive_index;
     waveforms[wid].tones[carrier_idx].amp = original_amp;
-    auto_compile_enabled = saved_auto;
-    compile_to_physical_waveform();
-
 }
 
 // Applies a logical Y (pi rotation) to the specified qubit.
@@ -1302,7 +1287,7 @@ void SpiralVM::logical_z_rotation(uint32_t qid, double angle) {
     waveforms[wid].tones[carrier_idx].freq += angle / (2.0 * M_PI);  // θ/T detuning
     waveforms[wid].tones[carrier_idx].set_iq(1.0, 0.0);  // WEAK X-drive
     
-    compile_to_physical_waveform();
+    //compile_to_physical_waveform();
     run_periods(1.0);
     
     // RESTORE PERFECT X

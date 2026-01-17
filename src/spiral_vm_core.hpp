@@ -136,6 +136,7 @@ public:
     void ramp_omega_ang(double start, double end, double duration_seconds);
     void global_pi_pulse();
     void logical_hadamard(uint32_t qid, int N_steps = 8, double H_amp = 0.2);
+    void logical_hadamard_step(uint32_t qid, double H_amp, int num_subharm);
     void apply_T_gate(uint32_t qid, int steps);
     double get_logical_phase_frame_corrected(uint32_t qid);
     int find_waveform_index_for_qubit(uint32_t qid);
@@ -175,7 +176,6 @@ public:
     int get_total_logical_qubits();
     size_t find_carrier_tone(int wid, uint32_t qid);
     double current_orbit_phase(uint32_t qid) const;
-    void logical_hadamard_step(uint32_t qid, double H_amp = 0.2);
 
     std::vector<LogicalQubit> logical_qubits;  // Logical qubit list
     std::vector<Waveform> waveforms;       // global waveform bank

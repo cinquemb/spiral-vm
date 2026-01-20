@@ -101,6 +101,7 @@ public:
     double J, h0, h1, omega, T;  // Hamiltonian / Floquet parameters
     bool is_ang;                 // Spiral angle flag
     bool overlap_enabled = false; // Overlap mode toggle
+    bool auto_compile_enabled = true;  // member variable
     bool use_phi_direct = false;  // false = full waveform + RK4, true = direct phi rotation
     arma::cx_mat state;   // ALWAYS up-to-date state (used by all measurements)
 
@@ -192,7 +193,6 @@ private:
     double omega_ang_base;
     double drive_phase = 0.0;
 
-    bool auto_compile_enabled = true;  // member variable
 
     std::vector<double> qubit_freqs;
 

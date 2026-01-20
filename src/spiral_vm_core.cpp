@@ -800,12 +800,13 @@ void SpiralVM::step_period(int n, double &delta_F) {
 
     if (auto_compile_enabled) {
         compile_to_physical_waveform();
+        std::string fname_base = "global_" + std::to_string(current_period);
+        dump_waveforms("csv", fname_base, -1);
+        std::string fname_base_h = "h_eff_" + std::to_string(current_period);
+        dump_h_eff(fname_base_h, -1);
     }
 
-    std::string fname_base = "global_" + std::to_string(current_period);
-    dump_waveforms("csv", fname_base, -1);
-    std::string fname_base_h = "h_eff_" + std::to_string(current_period);
-    dump_h_eff(fname_base_h, -1);
+    
 
     current_period++;
 }

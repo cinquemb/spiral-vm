@@ -108,6 +108,55 @@ void SpiralVM::initialize_state(const string& initial_state) {
     cout << "[SpiralVM] Initialized (" << initial_state << "), norm0=" << norm0 << "\n";
 }
 
+// Add this private helper
+void SpiralVM::apply_local_rotation(uint32_t qid,
+                                    double theta,      // rotation angle in rad
+                                    double phi_axis) { // rotation axis phase (0=X, π/2=Y)
+    if (qid >= logical_qubits.size()) return;
+
+    const LogicalQubit& q = logical_qubits[qid];
+    std::vector<int> sites;
+
+    for (int r = q.center_y - R; r <= q.center_y + R; ++r) {
+        if (r < 0 || r >= rows) continue;
+        for (int c = q.center_x - R; c <= q.center_x + R; ++c) {
+            if (c < 0 || c >= cols) continue;
+            sites.push_back(r * cols + c);
+        }
+    }
+
+    if (sites.empty()) return;
+
+    double ct = std::cos(theta / 2.0);
+    double st = std::sin(theta / 2.0);
+    std::complex<double> eip = std::exp(std::complex<double>(0, phi_axis));
+
+    for (int i : sites) {
+        std::complex<double> psi0 = phi(i * D + 0, 0);
+        std::complex<double> psi1 = phi(i * D + 1, 0);
+
+        // Bloch rotation around axis (cos(phi_axis), sin(phi_axis), 0)
+        std::complex<double> new_psi0 = ct * psi0 + st * eip * psi1;
+        std::complex<double> new_psi1 = -st * std::conj(eip) * psi0 + ct * psi1;
+
+        phi(i * D + 0, 0) = new_psi0;
+        phi(i * D + 1, 0) = new_psi1;
+    }
+
+    // Optional: renormalize neighborhood (cheap)
+    double norm = 0.0;
+    for (int i : sites) {
+        norm += std::norm(phi(i * D + 0, 0)) + std::norm(phi(i * D + 1, 0));
+    }
+    if (norm > 1e-12) {
+        norm = std::sqrt(norm / sites.size());
+        for (int i : sites) {
+            phi(i * D + 0, 0) /= norm;
+            phi(i * D + 1, 0) /= norm;
+        }
+    }
+}
+
 // ---------- Add logical qubit + allocate waveform ----------------
 int SpiralVM::allocate_waveform_for_qubit(uint32_t qid) {
     double base = freq_base;
@@ -607,6 +656,17 @@ void SpiralVM::logical_controlled_phase(uint32_t control, uint32_t target,
         return;
     }
 
+    if (use_phi_direct) {
+        // CZ = conditional phase π on |11⟩
+        // Simple approximation: phase target by π if control in |1⟩
+        // (not perfect, but good for fast sim; calibrate later)
+        double z_ctrl = measure_logical_Z(control);
+        if (z_ctrl < 0.0) {  // control ≈ |1⟩
+            logical_z_rotation(target, max_angle);
+        }
+        return;
+    }
+
     // Convert max_angle (desired conditional phase when both in |11>) into waveform strength
     // Rough heuristic: strength ≈ max_angle / (duration * some calibration factor)
     // Tune the 2.0 factor based on your sim (run test gates and measure acquired phase)
@@ -789,6 +849,12 @@ void SpiralVM::run_periods(uint32_t N_periods) {
 void SpiralVM::logical_hadamard(uint32_t qid, int N_steps, double H_amp) {
     if (qid >= logical_qubits.size()) return;
 
+    if (use_phi_direct) {
+        // Hadamard = rotation by π around (X+Z)/√2 axis → phi_axis = π/4
+        apply_local_rotation(qid, M_PI, M_PI/4.0);
+        return;
+    }
+
     //ideally min 200 steps with settings below
 
     double K_min_large = 1.0;          // minimum K for large grids
@@ -870,6 +936,12 @@ std::pair<double, double> generate_harmonic_iq_drive(double t_current, double T_
 // Single-step version (same logic)
 
 void SpiralVM::logical_hadamard_step(uint32_t qid, double H_amp, int num_subharm) {
+    if (use_phi_direct) {
+        // Single-step Hadamard approximation — same as above
+        apply_local_rotation(qid, M_PI, M_PI/4.0);
+        return;
+    }
+
     int wid = logical_qubits[qid].waveform_id;
     size_t carrier_idx = static_cast<size_t>(-1);
 
@@ -900,7 +972,7 @@ void SpiralVM::logical_hadamard_step(uint32_t qid, double H_amp, int num_subharm
     double q_drive = 2 *M_PI* iq_components.second;
     
     double quasi = is_ang ? (sin(omega * current_period) + sin(2*omega * current_period)) : 0.0;
-    waveforms[wid].tones[carrier_idx].phase += drive_phase + wrap_phase(M_PI * (quasi > 0 ? 1.0 : -1.0));
+    waveforms[wid].tones[carrier_idx].phase += 100 * drive_phase + wrap_phase(M_PI * (quasi > 0 ? 1.0 : -1.0));
     waveforms[wid].tones[carrier_idx].set_iq(i_drive, q_drive);
     waveforms[wid].tones[carrier_idx].amp *= 1 / std::sqrt(2);
 
@@ -923,6 +995,12 @@ double SpiralVM::current_orbit_phase(uint32_t qid) const {
 void SpiralVM::logical_x_pulse(uint32_t qid, double duration_periods) {
     if (qid >= logical_qubits.size()) {
         std::cout << "[SpiralVM] Invalid qubit id for logical X: " << qid << "\n";
+        return;
+    }
+
+    if (use_phi_direct) {
+        // X = π rotation around X-axis (phi_axis = 0)
+        apply_local_rotation(qid, M_PI, 0.0);
         return;
     }
 
@@ -980,6 +1058,12 @@ void SpiralVM::logical_x_pulse(uint32_t qid, double duration_periods) {
 void SpiralVM::logical_y_pulse(uint32_t qid, double duration_periods) {
     if (qid >= logical_qubits.size()) {
         std::cout << "[SpiralVM] Invalid qubit id for logical Y: " << qid << "\n";
+        return;
+    }
+
+    if (use_phi_direct) {
+        // Y = π rotation around Y-axis (phi_axis = π/2)
+        apply_local_rotation(qid, M_PI, M_PI/2.0);
         return;
     }
 
@@ -1126,6 +1210,26 @@ double SpiralVM::get_logical_phase(uint32_t qid) {
 }
 
 void SpiralVM::logical_z_rotation(uint32_t qid, double angle) {
+
+    if (use_phi_direct) {
+        // Z = phase gate on |1⟩ → multiply ψ₁ by e^{i angle}
+        if (qid >= logical_qubits.size()) return;
+        const LogicalQubit& q = logical_qubits[qid];
+        std::vector<int> sites;
+        for (int r = q.center_y - R; r <= q.center_y + R; ++r) {
+            if (r < 0 || r >= rows) continue;
+            for (int c = q.center_x - R; c <= q.center_x + R; ++c) {
+                if (c < 0 || c >= cols) continue;
+                sites.push_back(r * cols + c);
+            }
+        }
+        std::complex<double> eia = std::exp(std::complex<double>(0, angle));
+        for (int i : sites) {
+            phi(i * D + 1, 0) *= eia;
+        }
+        return;
+    }
+
     int wid = logical_qubits[qid].waveform_id;
     
     // YOUR CARRIER SEARCH (perfect!)

@@ -101,6 +101,7 @@ public:
     double J, h0, h1, omega, T;  // Hamiltonian / Floquet parameters
     bool is_ang;                 // Spiral angle flag
     bool overlap_enabled = false; // Overlap mode toggle
+    bool use_phi_direct = false;  // false = full waveform + RK4, true = direct phi rotation
     arma::cx_mat state;   // ALWAYS up-to-date state (used by all measurements)
 
     // Waveform engine tunables (public for easy experimentation)
@@ -257,6 +258,10 @@ private:
 
     // Safety helpers
     double clamp_tone_amp(double a) const;
+
+    void apply_local_rotation(uint32_t qid,
+                                    double theta,      // rotation angle in rad
+                                    double phi_axis);
 };
 
 #endif // SPIRAL_COMPILER_HPP

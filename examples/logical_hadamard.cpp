@@ -66,9 +66,9 @@ int main() {
         K = std::max(K, min_K);
 
         for (int k = 0; k < K; ++k){
-            vm.logical_x_pulse(q0, 1.0);           // full X kick
+            vm.logical_x_pulse(q0, 0.1);           // full X kick
             vm.logical_hadamard_step(q0, best_H, 5); // 5 subharmonics
-            vm.logical_z_rotation(q0, M_PI);       // full Z correction
+            vm.logical_z_rotation(q0, M_PI * 0.1);       // full Z correction
         }
 
 

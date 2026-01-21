@@ -6,7 +6,7 @@
 int main() {
     const int rows = 15;
     const int cols = 15;
-    const int N_steps = 200;       // incremental Hadamard steps, this is my warp limit, beyond this i next
+    const int N_steps = 15;       // incremental Hadamard steps, this is my warp limit, beyond this i next
     const double tol = 1e-3;      // convergence tolerance for X_norm
     const int max_iters = 1;     // bisection iterations
 
@@ -27,7 +27,7 @@ int main() {
     vm.logical_x_pulse(q0, 1);
 
     std::cout << "\n=== Step-by-step Hadamard with H_amp=" << best_H << " ===\n";
-    std::cout << "Step |    Z    |    X    | X_norm\n";
+    std::cout << "Step |    Z    |    X    | X_norm    |  Pulse Count\n";
     std::cout << "--------------------------------\n";
     int kick_count = 0;
 
@@ -58,7 +58,7 @@ int main() {
         double max_K_mult = K_min_large + (K_max_2x2 - K_min_large) / (1.0 + std::exp(steepness * (rows_cols - x0)));
 
 
-        int max_K = 25 * max_K_mult;  // full-force early
+        int max_K = 25 * max_K_mult * 10;  // full-force early
         int min_K = 5;   // later-stage micro-steps
 
         // ramp K down as step increases
@@ -69,6 +69,7 @@ int main() {
             vm.logical_x_pulse(q0, 0.1);           // full X kick
             vm.logical_hadamard_step(q0, best_H, 5); // 5 subharmonics
             vm.logical_z_rotation(q0, M_PI * 0.1);       // full Z correction
+            kick_count+=7;
         }
 
 
@@ -89,13 +90,15 @@ int main() {
                   << " | " << std::setw(8) << Z_now
                   << " | " << std::setw(8) << X_now
                   << " | " << std::setw(8) << X_norm
+                  << " | " << kick_count 
                   << "\n";
     }
 
 
     std::cout << "\nFinal: Z=" << Z(q0)
               << "  X=" << X(q0)
-              << "  X_norm=" << X(q0)/std::hypot(X(q0), Z(q0)) << "\n";
+              << "  X_norm=" << X(q0)/std::hypot(X(q0), Z(q0))
+              << "  pulse count=" << kick_count << "\n";
 
     return 0;
 }

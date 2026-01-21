@@ -15,9 +15,9 @@ def plot_qubit_data(files):
         with open(file, 'r') as f:
             for line in f:
                 parts = line.strip().split('|')
-                if len(parts) == 4:
+                if len(parts) >= 4:
                     step = int(parts[0].strip())
-                    Z, X, X_norm = map(float, [p.strip() for p in parts[1:]])
+                    Z, X, X_norm = map(float, [p.strip() for p in parts[1:4]])
                     data.append([step, Z, X, X_norm])
         
         # FIXED: 4 columns = step, Z, X, X_norm
@@ -85,5 +85,6 @@ if __name__ == "__main__":
         plot_qubit_data(sys.argv[1:])
     else:
         # Example usage
-        plot_qubit_data(['no_q_drive.txt', '2q_drive.txt', '1q_drive.txt', "opt_q_drive.txt"])
+        #plot_qubit_data(['no_q_drive.txt', '2q_drive.txt', '1q_drive.txt', "degen_q_drive.txt", "degen1_q_drive.txt", "degen2_q_drive.txt","degen3_q_drive.txt","degen4_q_drive.txt","degen5_q_drive.txt","hadamard_drive.txt", "hadamard_drive_K20.txt","opt_q_drive.txt"])
+        plot_qubit_data(["degen_q_drive.txt","hadamard_drive.txt", "hadamard_drive_K20.txt","opt_q_drive.txt"])
         print("\nOr run: python plot_qubit.py *.txt")

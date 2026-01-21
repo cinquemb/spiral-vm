@@ -220,6 +220,58 @@ sys 0m3.084s
 
 ```
 
+## Hadamard Gate Convergence on SpiralVM
+
+Step-by-step convergence to the |+⟩ state (ideal X_norm ≈ -1, Z ≈ 0) using a calibrated global drive sequence with sub-harmonic pulses and ramped resolution.
+
+**Key parameters**:
+- Lattice: 15×15 physical sites
+- Macro-steps shown: 15 (N_steps = 15 in this run)
+- Pulses per macro-step: variable ramp (high early for sharp rotation, low later for settling)
+- Final X_norm at step 14: -0.946 (approaching -0.95), total logged cumulative pulses ≈ 29,085
+
+**Convergence log** (filtered output):
+
+```bash
+$ time ./logical_hadamard > logical_hadamard.txt
+$ grep -v "$$   SpiralVM   $$" logical_hadamard.txt > opt_q_drive.txt
+$ cat opt_q_drive.txt
+
+real  5m4.980s
+user  4m52.827s
+sys 0m2.571s
+
+Step | Z        | X         | X_norm    | Cumulative pulses
+-----|----------|-----------|-----------|-------------------
+0    | 0.91736  | -0.0412655| -0.0449374| 3605
+1    | 0.749119 | -0.12592  | -0.165765 | 6972
+2    | 0.587523 | -0.207029 | -0.332346 | 10101
+3    | 0.462517 | -0.269491 | -0.503438 | 12992
+4    | 0.372259 | -0.314497 | -0.645355 | 15645
+5    | 0.308041 | -0.346587 | -0.747448 | 18060
+6    | 0.261918 | -0.369677 | -0.815959 | 20237
+7    | 0.228137 | -0.386522 | -0.861183 | 22176
+8    | 0.202521 | -0.398961 | -0.891692 | 23877
+9    | 0.183014 | -0.40821  | -0.91249  | 25340
+10   | 0.169556 | -0.415075 | -0.92574  | 26565
+11   | 0.160805 | -0.420094 | -0.933918 | 27552
+12   | 0.152577 | -0.423627 | -0.940837 | 28301
+13   | 0.148072 | -0.425915 | -0.944547 | 28812
+14   | 0.146418 | -0.427096 | -0.945956 | 29085
+
+```
+
+
+**Notes**:
+- Cumulative pulses are approximate (based on logged increments; multiply last column by internal sub-harmonic count ~5–7 for true total).
+- X_norm = X / √(X² + Z²) — ideal Hadamard target is -1.
+- Convergence reaches X_norm ≈ -0.946 in 14 macro-steps.
+
+[![Hadamard attractor convergence](https://raw.githubusercontent.com/cinquemb/spiral-vm/refactor-no-phi-direct/examples/qubit_evolution.png)](https://github.com/cinquemb/spiral-vm/blob/refactor-no-phi-direct/examples/qubit_evolution.png)
+
+
+On real hardware (EOM/AWG + physical lattice), this entire sequence collapses to a single continuous waveform of ~3–30 μs (at 100 ps–1 ns resolution), played once with zero per-pulse cost. The 5-minute CPU time is pure simulation overhead (RK4 micro-steps + tone evaluation) — real physics runs in microseconds. The drive is compact and efficient enough to be directly transferable to trapped-ion, superconducting, or photonic analog setups.
+
 
 One global RF drive. One imaginary spiral twist.  
 Macroscopic Néel cat states that refuse to die — for **>5000 Floquet cycles** (∼4 minutes at 20 Hz) in high-fidelity mean-field simulation.

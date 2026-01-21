@@ -42,10 +42,17 @@ int infer_period(const std::vector<double>& z) {
 }
 
 // Spiral analogue of "multiply by a mod N"
-void apply_Ua(SpiralVM& vm, uint32_t work, long long a, long long N) {
-    // embed a mod N into a smooth phase kick
-    double theta = 2.0 * M_PI * (double(a % N) / double(N));
-    vm.logical_phase_ramp(work, theta, 1);
+void apply_Ua(SpiralVM& vm, uint32_t work, long long ak, long long N) {
+    // Direct continuous embedding of ak mod N as phase kick
+    // ak is already a^{2^k} mod N from the caller
+    double frac = double(ak % N) / double(N);           // [0,1) fraction
+    double theta = 2.0 * M_PI * frac;                   // full 2π range for one full cycle
+
+    // Optional: scale theta slightly to prevent over-rotation on large ak
+    // (tune factor 0.5–2.0 depending on your lattice stability)
+    theta *= 0.8;  // start conservative, increase if phase spread is too weak
+
+    vm.logical_phase_ramp(work, theta, 1);              // one period ramp
     vm.run_periods(1);
 }
 
@@ -116,17 +123,16 @@ int main(int argc, char* argv[]) {
         // Step 2: Entangled controlled-Ua^x analogue
         for (int k = 0; k < m; ++k) {
             long long ak = mod_pow(a, 1LL << k, N);
-            int reps = int(ak % 32) + 1;  // bounded for stability
 
-            std::cout << "[Shor] k=" << k << "  a^(2^k) mod N=" << ak
-                      << "  reps=" << reps << "\n";
+            std::cout << "[Shor] k=" << k << "  a^(2^k) mod N=" << ak << "\n";
 
-            for (int r = 0; r < reps; ++r) {
-                apply_Ua(vm, work, a, N);
-            }
+            // Apply U_a^{2^k} as single scaled phase ramp (no repetition needed)
+            apply_Ua(vm, work, ak, N);
 
-            // imprint work evolution onto this phase qubit
-            double imprint = 2.0 * M_PI * (double(reps) / 32.0);
+            // Imprint a scaled version of the exponent onto phase[k]
+            // (use log scale or direct fraction — log2 gives smoother gradient)
+            double log_frac = (k == 0) ? 0.0 : std::log2(1LL << k) / double(m);
+            double imprint = 2.0 * M_PI * log_frac;  // [0, 2π] ramp across register
             vm.logical_phase_ramp(phase[k], imprint, 1);
             vm.run_periods(1);
         }

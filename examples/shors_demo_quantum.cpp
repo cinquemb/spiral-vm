@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <numeric>
+#include <unordered_set>
 
 bool is_coprime(long long a, long long b) {
     return std::gcd(static_cast<unsigned long long>(a),
@@ -25,9 +26,11 @@ long long mod_pow(long long base, long long exp, long long mod) {
     return result;
 }
 
-// crude period inference from analog Z readout
+// crude period inference from analog Z readout - bidirectional search
 int infer_period(const std::vector<double>& z) {
     size_t m = z.size();
+    
+    // Forward search: smallest r first
     for (size_t r = 1; r <= m / 2; ++r) {
         bool match = true;
         for (size_t i = 0; i < m - r; ++i) {
@@ -38,7 +41,20 @@ int infer_period(const std::vector<double>& z) {
         }
         if (match) return static_cast<int>(r);
     }
-    return static_cast<int>(m);
+    
+    // Backward search: largest plausible r first
+    for (int r = static_cast<int>(m / 2); r >= 2; --r) {
+        bool match = true;
+        for (size_t i = 0; i < m - r; ++i) {
+            if (std::abs(z[i] - z[i + r]) > 0.05) {
+                match = false;
+                break;
+            }
+        }
+        if (match) return r;
+    }
+    
+    return static_cast<int>(m);  // fallback to full length
 }
 
 // Spiral analogue of "multiply by a mod N"
@@ -64,6 +80,8 @@ int main(int argc, char* argv[]) {
         std::cerr << "  use_phi_direct = 1 (fast phi mode) or 0 (waveform mode), default 1\n";
         return 1;
     }
+
+    std::unordered_set<long long> seen;
 
 
     const long long N = std::atoll(argv[1]);
@@ -103,6 +121,8 @@ int main(int argc, char* argv[]) {
         long long a;
         do {
             a = 2 + (rand() % (N - 2));
+            if (seen.count(a)) continue;  // skip if already tried
+            seen.insert(a);
         } while (!is_coprime(a, N));
 
         /*

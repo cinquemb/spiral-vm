@@ -360,6 +360,7 @@ uint32_t SpiralVM::add_qubit(uint32_t x, uint32_t y) {
 
     // Unwrapped phase coordinate (ℝ, not mod 2π)
     logical_phase.push_back(0.0);
+    winding.push_back({0,0,0.0});
 
     uint32_t qid = logical_qubits.size() - 1;
 
@@ -816,6 +817,12 @@ int SpiralVM::get_total_logical_qubits(){
     return logical_qubits.size();
 }
 
+void SpiralVM::recenter_phase(uint32_t q, double phi_center) {
+    // Shift phase so phi_center maps to 0
+    logical_phase[q] -= phi_center;
+}
+
+
 
 // ---------- run N periods ----------------
 void SpiralVM::run_periods(uint32_t N_periods) {
@@ -835,6 +842,10 @@ void SpiralVM::run_periods(uint32_t N_periods) {
                       << " crossed sheet boundary: "
                       << prev_sheet << " -> " << new_sheet
                       << " (φ=" << logical_phase[q] << ")\n";
+
+            winding[q].crossings++;
+            winding[q].last_sheet = new_sheet;
+            winding[q].last_phi = logical_phase[q];
         }
     }
 

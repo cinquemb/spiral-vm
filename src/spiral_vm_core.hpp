@@ -63,6 +63,13 @@ struct Waveform {
     }
 };
 
+struct PhaseWindingInfo {
+    int last_sheet = 0;
+    int crossings = 0;
+    double last_phi = 0.0;
+};
+
+
 struct LogicalQubit {
     uint32_t center_x, center_y;  // spiral center
     double base_phase;
@@ -178,6 +185,7 @@ public:
     int get_total_logical_qubits();
     size_t find_carrier_tone(int wid, uint32_t qid);
     double current_orbit_phase(uint32_t qid) const;
+    void recenter_phase(uint32_t q, double phi_center);
 
     std::vector<LogicalQubit> logical_qubits;  // Logical qubit list
     std::vector<Waveform> waveforms;       // global waveform bank
@@ -185,6 +193,7 @@ public:
     // Frequency allocation bookkeeping
     std::vector<double> allocated_carriers;
     std::vector<double> logical_phase;  // size = num logical qubits
+    std::vector<PhaseWindingInfo> winding;
     std::vector<int> drive_index;          // size N, drive_index[i] = waveform ID
 
 

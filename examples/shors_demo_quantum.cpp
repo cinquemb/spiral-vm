@@ -118,9 +118,9 @@ int main(int argc, char* argv[]) {
 
     int m_min = std::ceil(std::log2(N));
     int m = m_min + 2;   // start modest
-    double zoom =1.0;
 
     while (factor1 == 1 || factor1 == N) {
+        double zoom =1.0;
         attempt++;
         std::cout << "\n[Shor] Attempt #" << attempt << " on N=" << N << "\n";
 

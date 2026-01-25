@@ -10,6 +10,25 @@
 #include <numeric>
 #include <unordered_set>
 
+double mean_abs(const std::vector<double>& v) {
+    if (v.empty()) return 0.0;
+    double s = 0.0;
+    for (double x : v) s += std::abs(x);
+    return s / v.size();
+}
+
+double variance(const std::vector<double>& v) {
+    if (v.size() < 2) return 0.0;
+    double mu = 0.0;
+    for (double x : v) mu += x;
+    mu /= v.size();
+
+    double s2 = 0.0;
+    for (double x : v) s2 += (x - mu) * (x - mu);
+    return s2 / (v.size() - 1);
+}
+
+
 bool is_coprime(long long a, long long b) {
     return std::gcd(static_cast<unsigned long long>(a),
                      static_cast<unsigned long long>(b)) == 1;
@@ -119,8 +138,24 @@ int main(int argc, char* argv[]) {
     int m_min = std::ceil(std::log2(N));
     int m = m_min + 2;   // start modest
 
+    std::vector<long long> best_as;
+    double best_score = 1e18;
+    double best_a = 0;
+
     while (factor1 == 1 || factor1 == N) {
+        // ===== Reset per-a winding diagnostics =====
+        std::vector<int> crossings_history;
+        std::vector<double> delta_history;
+        std::vector<double> accel_history;
+
+        std::vector<double> z;
+        long long a_k;
+        double phi;
+        long long r;
+
         double zoom =1.0;
+        double score = 0.0;
+
         attempt++;
         std::cout << "\n[Shor] Attempt #" << attempt << " on N=" << N << "\n";
 
@@ -145,10 +180,24 @@ int main(int argc, char* argv[]) {
 
         long long a;
         do {
-            a = 2 + (rand() % (N - 2));
-            if (seen.count(a)) continue;  // skip if already tried
+            if(!best_as.empty() && rand() % 3 == 0) {  // 33% guided
+                a = best_as[rand() % best_as.size()];
+                long long g = 2 + (rand() % 11);
+                a = mod_pow(a, g, N);
+                std::cout << "[Guide] Sampling from top-K pool\n";
+            } else {
+                a = 2 + (rand() % (N - 3));  // 67% explore
+            }
+
+            if (seen.count(a)) continue;
+            if (std::gcd(a, N) != 1) continue;
+            if (mod_pow(a, 2, N) == 1) continue;
+
             seen.insert(a);
-        } while (!is_coprime(a, N));
+            break;
+
+        } while (true);
+
 
 
         std::cout << "[Shor] Random base a=" << a << "\n";
@@ -164,11 +213,46 @@ int main(int argc, char* argv[]) {
             if (k == 0) ak = a % N;
             else ak = modmul(ak, ak, N);
 
-
             std::cout << "[Shor] k=" << k << "  a^(2^k) mod N=" << ak << "\n";
 
             // Apply U_a^{2^k} as single scaled phase ramp (no repetition needed)
             apply_Ua(vm, work, ak, N, m, zoom);
+
+            int Ck = vm.winding[work].crossings;
+            crossings_history.push_back(Ck);
+
+            int n = crossings_history.size();
+
+            // First difference: ΔC
+            if (n >= 2) {
+                double delta = crossings_history[n - 1] - crossings_history[n - 2];
+                delta_history.push_back(delta);
+            }
+
+            // Second difference: Δ²C (phase acceleration)
+            if (n >= 3) {
+                double delta1 = crossings_history[n - 1] - crossings_history[n - 2];
+                double delta2 = crossings_history[n - 2] - crossings_history[n - 3];
+                double accel  = delta1 - delta2;
+                accel_history.push_back(accel);
+            }
+
+
+            // ---- Early abort: chaotic winding ----
+            if (accel_history.size() >= 4) {
+
+                double mean_accel = mean_abs(accel_history);
+                double var_delta  = variance(delta_history);
+
+                // Tunable thresholds (start conservative)
+                if (mean_accel > 1.5 || var_delta > 4.0) {
+                    std::cout << "[Guide] Early abort: chaotic phase "
+                              << "(|Δ²C|=" << mean_accel
+                              << ", var(ΔC)=" << var_delta << ")\n";
+                    goto NEXT_A;  // jump to next a
+                }
+            }
+
 
             // Imprint a scaled version of the exponent onto phase[k]
             // (use log scale or direct fraction — log2 gives smoother gradient)
@@ -176,6 +260,24 @@ int main(int argc, char* argv[]) {
             double imprint = 2.0 * M_PI * log_frac;  // [0, 2π] ramp across register
             vm.logical_phase_ramp(phase[k], imprint, 1);
             vm.run_periods(1);
+        }
+
+        // ---- Score this a ----
+        score =
+            mean_abs(accel_history)
+            + 0.25 * variance(delta_history);
+
+        if (score < best_score) {
+            best_score = score;
+            best_a = a;
+            best_as.push_back(a);
+            std::sort(best_as.begin(), best_as.end(), [&](long long x, long long y) {
+                return mod_pow(x, 2, N) != 1 && mod_pow(y, 2, N) == 1;  // heuristic pre-filter
+            });
+            if(best_as.size() > 5) best_as.resize(5);
+
+            std::cout << "[Guide] New best a=" << a << " score=" << score 
+              << " (top-" << best_as.size() << ")\n";
         }
 
         // Step 3: inverse QFT (approximate)
@@ -189,7 +291,6 @@ int main(int argc, char* argv[]) {
         vm.run_periods(1);
 
         // Step 4: measure phase register
-        std::vector<double> z;
         for (auto q : phase)
             z.push_back(vm.measure_logical_Z(q));
 
@@ -197,22 +298,14 @@ int main(int argc, char* argv[]) {
         for (double v : z) std::cout << v << " ";
         std::cout << "\n";
 
-        double phi = phase_estimate(z);
-        long long r = continued_fraction_denominator(phi, N);
+        phi = phase_estimate(z);
+        r = continued_fraction_denominator(phi, N);
 
         if (r % 2 != 0) r *= 2;
         if (r <= 1 || r >= N) {
             continue;
         }
         if (r <= 1 || r >= N || mod_pow(a, r, N) != 1) {
-            /*
-            if (m < m_min + 4) {
-                m++;
-                std::cerr << "[Shor] Bad r=" << r << "; retrying with higher resolution...\n";
-                continue;  // rerun with higher resolution
-            }*/
-
-
 
             uint32_t dominant = work;
             bool s_zoom = false;
@@ -236,7 +329,7 @@ int main(int argc, char* argv[]) {
 
         std::cout << "[Shor] Estimated period r=" << r << "\n";
 
-        long long a_k = mod_pow(a, r / 2, N);
+        a_k = mod_pow(a, r / 2, N);
         factor1 = std::gcd(N, std::abs(a_k - 1));
         factor2 = std::gcd(N, std::abs(a_k + 1));
 
@@ -251,6 +344,10 @@ int main(int argc, char* argv[]) {
                       << " × " << factor2 << "\n";
             break;
         }
+
+
+        NEXT_A:
+            continue;
     }
 
     return 0;

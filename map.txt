@@ -1,6 +1,40 @@
 
 Logical qubit → local waveform → physical neighborhood → merged global waveform → time evolution → measurements
 
+=======
+┌───────────────────┐
+│  Quick IR Circuit │
+│  (CX, X, Z, H...)│
+└─────────┬─────────┘
+          │ translate
+          ▼
+┌───────────────────┐
+│ SpiralVM Backend  │
+│ - map Quick gates │
+│ - assign logical  │
+│   qubits & waveforms │
+└─────────┬─────────┘
+          │ compile_to_physical_waveform()
+          ▼
+┌───────────────────────────────┐
+│ Global Imaginary Spiral Drive │
+│ - drives all logical qubits  │
+│ - applies π/2 phase ramps    │
+│ - enforces attractor-stable │
+│   Floquet evolution          │
+│ - handles logical CZ, H via │
+│   waveform alignment         │
+└─────────┬────────────────────┘
+          │ run_periods(N)
+          ▼
+┌─────────────────────┐
+│ Logical Qubit Output │
+│ - <Z> measurements   │
+│ - ZZ correlations    │
+│ - logical rotations  │
+└─────────────────────┘
+
+
 
 ───────────────────────────── SpiralVM ASCII Map ──────────────────────────────
 

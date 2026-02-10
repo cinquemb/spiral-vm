@@ -1,0 +1,128 @@
+
+Logical qubit → local waveform → physical neighborhood → merged global waveform → time evolution → measurements
+
+┌───────────────────┐
+│  Quick IR Circuit │
+│  (CX, X, Z, H...)│
+└─────────┬─────────┘
+          │ translate
+          ▼
+┌───────────────────┐
+│ SpiralVM Backend  │
+│ - map Quick gates │
+│ - assign logical  │
+│   qubits & waveforms │
+└─────────┬─────────┘
+          │ compile_to_physical_waveform()
+          ▼
+┌───────────────────────────────┐
+│ Global Imaginary Spiral Drive │
+│ - drives all logical qubits  │
+│ - applies π/2 phase ramps    │
+│ - enforces attractor-stable │
+│   Floquet evolution          │
+│ - handles logical CZ, H via │
+│   waveform alignment         │
+└─────────┬────────────────────┘
+          │ run_periods(N)
+          ▼
+┌─────────────────────┐
+│ Logical Qubit Output │
+│ - <Z> measurements   │
+│ - ZZ correlations    │
+│ - logical rotations  │
+└─────────────────────┘
+
+
+
+───────────────────────────── SpiralVM ASCII Map ──────────────────────────────
+
+Grid layout:  rows × cols physical sites (N = rows*cols)
+Logical qubits are placed at specific (x,y) centers
+Each logical qubit drives a local neighborhood of radius R
+
++---------------- Physical Grid ----------------+
+| P0 | P1 | P2 | P3 | ...                       |  <- row 0
+| P4 | P5 | P6 | P7 | ...                       |  <- row 1
+| ...                                          |
++-----------------------------------------------+
+
+Logical qubits: q0, q1, q2, q3
+Assigned neighborhoods (R=1 example):
+
+        q0       q1
+       (o)     (o)
+      / | \   / | \
+   P0 P1 P2 P4 P5 P6  ...  (physical sites)
+    |  |  |   |  |  |
+   waveforms  waveforms
+      w0        w1
+
+Notes:
+- Each logical qubit q_i has a waveform w_i with tones:
+    - main carrier at freq_i
+    - small helper tone (crosstalk cancel)
+- drive_index[i] maps each physical site P_i → waveform ID
+
+────────────────────────── Compile to Global ──────────────────────────
+
+All logical waveforms are merged into a single global waveform w_global:
+
+w_global = merge(w0, w1, w2, w3, ...)
+
+           +--------------------------+
+           | Global Waveform w_global |
+           |--------------------------|
+           | Tone 0: amp, freq=q0    |
+           | Tone 1: helper q0       |
+           | Tone 2: amp, freq=q1    |
+           | Tone 3: helper q1       |
+           | ...                      |
+           +--------------------------+
+
+- During RK4 evolution, each physical site evaluates the waveform assigned by drive_index:
+    local_field[i] = h0 + eval_waveform(w_global, t, local_phase)
+- Only tones matching the waveform assigned to that site contribute
+
+───────────────────────── Gate Application ─────────────────────────
+
+Logical X gate on q1:
+
+  [Boost main carrier in w1 temporarily]
+  drive_index → physical neighborhood of q1
+  run_periods(1)  // state evolves via Hamiltonian
+  restore original amplitude
+
+Logical CZ gate between q0 & q2:
+
+  [Generate CZ waveform w_cz with beat tone ~ |freq0 - freq2|]
+  Temporarily assign w_cz to neighborhoods of q0 & q2
+  run_periods(1)  // entangling interaction
+  restore drive_index to original waveforms
+
+───────────────────────── Floquet Evolution ─────────────────────────
+
+Time stepping (RK4):
+
+t = 0 → dt → 2dt → ... → T (one period)
+  Each step:
+    1. Evaluate local_hx[i] from waveform assigned to site i
+    2. Construct H_sx (inhomogeneous Sx)
+    3. Compute ZZ interaction Hzz separately
+    4. RK4 step to evolve phi → new state
+    5. Normalize phi
+
+Output:
+- fidelities[period] = |<phi_in|phi>|^2
+- logical Z measurements
+- waveform dumps (CSV / JSON) including IQ samples
+
+───────────────────────── Measurement ─────────────────────────
+
+logical Z on q_i:
+   sum over staggered neighborhood:
+       Z_i = Σ_i (|phi_i0|^2 - |phi_i1|^2) * stagger_factor
+   average over neighborhood
+   return logical Z expectation value
+
+──────────────────────────── End Diagram ─────────────────────────────

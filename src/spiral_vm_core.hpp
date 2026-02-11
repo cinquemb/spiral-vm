@@ -10,7 +10,15 @@
 #include <string>
 #include <limits>
 
+#include <cmath>
+#include <iostream>
 
+struct ReadoutSpecs {
+    double detector_bandwidth;   // Hz
+    double integration_time;     // seconds
+    double snr;                  // linear SNR (not dB)
+    double safety_factor;        // e.g. 2.0
+};
 
 // Minimal footprint Waveform/Tone types (kept public for test scripting)
 struct Tone {
@@ -186,6 +194,8 @@ public:
     size_t find_carrier_tone(int wid, uint32_t qid);
     double current_orbit_phase(uint32_t qid) const;
     void recenter_phase(uint32_t q, double phi_center);
+    double min_frequency_spacing(const ReadoutSpecs& specs);
+    int SpiralVM::max_logical_qubits(const ReadoutSpecs& specs);
 
     std::vector<LogicalQubit> logical_qubits;  // Logical qubit list
     std::vector<Waveform> waveforms;       // global waveform bank

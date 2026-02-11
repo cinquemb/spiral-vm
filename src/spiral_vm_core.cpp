@@ -349,6 +349,22 @@ DriveXY SpiralVM::eval_waveform_xy(const Waveform &w, double t, double local_pha
     return out;
 }
 
+double SpiralVM::min_frequency_spacing(const ReadoutSpecs& specs) {
+    // Fourier limit
+    double fourier_limit = specs.safety_factor / specs.integration_time;
+
+    // Noise-limited frequency uncertainty
+    double noise_limit = (3.0) / (2.0 * M_PI * specs.integration_time * specs.snr);
+
+    return std::max(fourier_limit, noise_limit);
+}
+
+int SpiralVM::max_logical_qubits(const ReadoutSpecs& specs) {
+    double df = min_frequency_spacing(specs);
+    return static_cast<int>(specs.detector_bandwidth / df);
+}
+
+
 // ---------- Add logical qubit ----------
 uint32_t SpiralVM::add_qubit(uint32_t x, uint32_t y) {
     LogicalQubit q;

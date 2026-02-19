@@ -128,7 +128,7 @@ int main(int argc, char* argv[]) {
         vm.is_ang = true;
         vm.auto_compile_enabled = false;
         vm.use_phi_direct = use_phi;  // <--- the toggle you wanted
-        vm.initialize_state("neel");
+        vm.initialize_state("polarized");
 
         //int m = static_cast<int>(std::ceil(2 * std::log2(N)));
 

@@ -195,7 +195,7 @@ public:
     double current_orbit_phase(uint32_t qid) const;
     void recenter_phase(uint32_t q, double phi_center);
     double min_frequency_spacing(const ReadoutSpecs& specs);
-    int SpiralVM::max_logical_qubits(const ReadoutSpecs& specs);
+    int max_logical_qubits(const ReadoutSpecs& specs);
 
     std::vector<LogicalQubit> logical_qubits;  // Logical qubit list
     std::vector<Waveform> waveforms;       // global waveform bank

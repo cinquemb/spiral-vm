@@ -1154,8 +1154,9 @@ double SpiralVM::measure_logical_Z(uint32_t qid) const {
         for (int col = q.center_x - R; col <= q.center_x + R; ++col) {
             if (col < 0 || col >= cols) continue;
             int i = row * cols + col;
-            double sz = N * (std::norm(phi(i*D + 0,0)) - std::norm(phi(i*D + 1,0)));  // Add N factor
-            staggered += ((row + col) % 2 == 0) ? sz : -sz;
+            //double sz = N * (std::norm(phi(i*D + 0,0)) - std::norm(phi(i*D + 1,0)));  // Add N factor
+            double sz = (std::norm(phi(i*D + 0,0)) - std::norm(phi(i*D + 1,0)));  // Add N factor
+            staggered += sz;//((row + col) % 2 == 0) ? sz : -sz;
             ++count;
         }
     }

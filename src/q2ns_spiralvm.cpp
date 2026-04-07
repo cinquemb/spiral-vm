@@ -10,8 +10,8 @@ QStateSpiral::QStateSpiral(std::size_t grid_size, bool use_phi_direct)
 {
     vm_.is_ang = true;
     vm_.use_phi_direct = use_phi_direct;
-    vm_.initialize_state("neel");   // or "neel" — change as needed
-    vm_.auto_compile_enabled = false;    // usually better to control manually
+    vm_.initialize_state("neel");
+    vm_.auto_compile_enabled = false;
 }
 
 std::size_t QStateSpiral::NumQubits() const {
@@ -23,12 +23,9 @@ uint32_t QStateSpiral::AddQubit(uint32_t x, uint32_t y) {
 }
 
 int64_t QStateSpiral::AssignStreams(int64_t stream) {
-    // Unique salt so SpiralVM does not collide with other backends
-    constexpr uint64_t SPIRAL_SALT = 0x53504952414C564DULL; // "SPIRALVM"
-
+    constexpr uint64_t SPIRAL_SALT = 0x53504952414C564DULL;
     return AssignStreamsGlobal<SPIRAL_SALT>(stream, [this](uint64_t seed) {
         vm_.rng.seed(seed);
-        // You can reseed other internal generators here if needed
     });
 }
 
@@ -36,10 +33,9 @@ void QStateSpiral::Apply(const QGate& g, const std::vector<Index>& targets)
 {
     if (targets.empty()) return;
 
-    // Helper lambda to apply a built-in gate
     auto apply_builtin = [&](QGateKind kind) {
         switch (kind) {
-            case QGateKind::I:  /* no-op */ break;
+            case QGateKind::I:  break;
             case QGateKind::H:
                 for (Index q : targets) vm_.logical_hadamard(static_cast<uint32_t>(q), 200, 1.0);
                 break;
@@ -63,14 +59,13 @@ void QStateSpiral::Apply(const QGate& g, const std::vector<Index>& targets)
                     uint32_t ctrl = static_cast<uint32_t>(targets[0]);
                     uint32_t tgt  = static_cast<uint32_t>(targets[1]);
                     if (kind == QGateKind::CZ || kind == QGateKind::CNOT) {
-                        vm_.logical_cz(ctrl, tgt);           // or logical_controlled_phase
+                        vm_.logical_cz(ctrl, tgt);
                         if (kind == QGateKind::CNOT) {
                             vm_.logical_hadamard(tgt);
                             vm_.logical_cz(ctrl, tgt);
                             vm_.logical_hadamard(tgt);
                         }
                     } else if (kind == QGateKind::SWAP) {
-                        // Rough SWAP via 3 CNOTs
                         vm_.logical_hadamard(tgt); vm_.logical_cz(ctrl, tgt); vm_.logical_hadamard(tgt);
                         vm_.logical_hadamard(ctrl); vm_.logical_cz(tgt, ctrl); vm_.logical_hadamard(ctrl);
                         vm_.logical_hadamard(tgt); vm_.logical_cz(ctrl, tgt); vm_.logical_hadamard(tgt);
@@ -78,7 +73,7 @@ void QStateSpiral::Apply(const QGate& g, const std::vector<Index>& targets)
                 }
                 break;
             case QGateKind::Custom:
-                std::cerr << "[SpiralVM] Custom unitary gates not supported yet (matrix-based)\n";
+                std::cerr << "[SpiralVM] Custom unitary gates not supported yet\n";
                 break;
             default:
                 std::cerr << "[SpiralVM] Unknown gate kind\n";
@@ -91,15 +86,10 @@ void QStateSpiral::Apply(const QGate& g, const std::vector<Index>& targets)
         apply_builtin(g.Kind());
     }
 
-    // Stabilization step after every gate (tune this value)
     vm_.run_periods(1);
 }
 
 std::shared_ptr<QState> QStateSpiral::MergeDisjoint(const QState& other) const {
-    // Improved MergeDisjoint taking advantage of the high logical density support.
-    // Since crosstalk is negligible below 121 logical qubits per physical site,
-    // we can pack the new logical qubits quite densely without immediate problems.
-
     auto copy = std::make_shared<QStateSpiral>(*this);
 
     const auto* other_spiral = dynamic_cast<const QStateSpiral*>(&other);
@@ -108,48 +98,63 @@ std::shared_ptr<QState> QStateSpiral::MergeDisjoint(const QState& other) const {
         return copy;
     }
 
-    // Place new qubits with moderate spacing (can be made denser if needed)
     uint32_t current_max_x = 0;
     for (const auto& q : vm_.logical_qubits) {
         if (q.center_x > current_max_x) current_max_x = q.center_x;
     }
 
-    uint32_t offset_x = current_max_x + 4;   // relatively tight packing is acceptable
+    uint32_t offset_x = current_max_x + 6;
 
     for (uint32_t i = 0; i < other_spiral->NumQubits(); ++i) {
-        copy->AddQubit(offset_x + (i % 8)*3, 10 + (i / 8)*3);  // 2D packing
+        copy->AddQubit(offset_x + (i % 10)*4, 12 + (i / 10)*4);
     }
 
     return copy;
 }
 
-void QStateSpiral::ApproximateCollapse(uint32_t qid, int outcome) {
-    if (outcome == 1) {
-        vm_.apply_local_rotation(qid, M_PI, 0.0);   // bias toward |1>
-    }
+// Improved collapse: rotate toward the measured basis before projecting
+void QStateSpiral::ApproximateCollapse(uint32_t qid, Basis basis, int outcome)
+{
+    double angle = 0.0;
+    double axis  = 0.0;
+
+    if (basis == Basis::X)      { angle = M_PI; axis = 0.0; }      // X rotation
+    else if (basis == Basis::Y) { angle = M_PI; axis = M_PI/2.0; } // Y rotation
+    else /* Z */                { angle = (outcome == 1 ? M_PI : 0.0); axis = 0.0; }
+
+    vm_.apply_local_rotation(qid, angle, axis);
     vm_.run_periods(2);
 }
 
-MeasureResult QStateSpiral::Measure(Index target, Basis basis) {
-    if (basis != Basis::Z) {
-        std::cerr << "[SpiralVM] Only Z-basis measurement is currently supported\n";
+MeasureResult QStateSpiral::Measure(Index target, Basis basis)
+{
+    uint32_t q = static_cast<uint32_t>(target);
+    double expectation = 0.0;
+
+    switch (basis) {
+        case Basis::Z:
+            expectation = vm_.measure_logical_Z(q);
+            break;
+        case Basis::X:
+            expectation = vm_.measure_logical_X(q);
+            break;
+        case Basis::Y:
+            expectation = vm_.measure_logical_Y(q);
+            break;
+        default:
+            std::cerr << "[SpiralVM] Unsupported measurement basis\n";
+            expectation = vm_.measure_logical_Z(q);
     }
 
-    uint32_t q = static_cast<uint32_t>(target);
-    double z_exp = vm_.measure_logical_Z(q);
-
-    // Probabilistic outcome based on expectation value
-    double p0 = (1.0 + z_exp) / 2.0;
+    double p0 = (1.0 + expectation) / 2.0;
     int outcome = (vm_.dist(vm_.rng) < p0) ? 0 : 1;
 
-    ApproximateCollapse(q, outcome);
+    ApproximateCollapse(q, basis, outcome);
 
     MeasureResult res;
     res.outcome = outcome;
-
-    // For many networking protocols a shallow copy is acceptable
     res.measured = std::make_shared<QStateSpiral>(*this);
-    res.survivor = std::make_shared<QStateSpiral>(*this);   // TODO: proper qubit removal + index shift
+    res.survivor = std::make_shared<QStateSpiral>(*this);   // TODO: proper removal
 
     return res;
 }
@@ -160,35 +165,27 @@ void QStateSpiral::Print(std::ostream& os) const {
     os << "  Logical qubits : " << NumQubits() << "\n";
     os << "  Use phi direct : " << (use_phi_direct_ ? "yes" : "no") << "\n";
     os << "  Current period : " << vm_.get_period() << "\n";
-    os << "  Underlying state: full lattice phi (" << vm_.N << " sites)\n\n";
+    os << "  Underlying state: full lattice phi (" << vm_.N << " sites)\n";
+    os << "  Crosstalk regime: negligible below 121 logical : 1 physical\n";
+    os << "                    spectral crowding starts at 122:1\n\n";
 
-    os << "  Qubit  |   <Z>     |   Phase (wrapped)\n";
-    os << "  -------+-----------+-------------------\n";
+    os << "  Qubit  |   <Z>     |   <X>     |   <Y>     |   Phase (×2π)\n";
+    os << "  -------+-----------+-----------+-----------+---------------\n";
 
     for (std::size_t q = 0; q < NumQubits(); ++q) {
-        double z = vm_.measure_logical_Z(static_cast<uint32_t>(q));
-        double phi = vm_.get_logical_phase(static_cast<uint32_t>(q));
-        os << "  " << std::setw(6) << q
-           << " | " << std::fixed << std::setprecision(6) << std::setw(9) << z
-           << " | " << std::setw(12) << (phi / (2.0 * M_PI)) << " * 2π\n";
-    }
+        uint32_t qid = static_cast<uint32_t>(q);
+        double z = vm_.measure_logical_Z(qid);
+        double x = vm_.measure_logical_X(qid);
+        double y = vm_.measure_logical_Y(qid);
+        double phi_val = vm_.get_logical_phase(qid);
 
-    // Optional: show some pairwise correlations
-    if (NumQubits() >= 2) {
-        os << "\n  ZZ correlations (selected):\n";
-        for (std::size_t i = 0; i < std::min<std::size_t>(NumQubits(), 4); ++i) {
-            for (std::size_t j = i+1; j < std::min<std::size_t>(NumQubits(), 5); ++j) {
-                double zz = vm_.logical_zz_correlation(static_cast<uint32_t>(i),
-                                                       static_cast<uint32_t>(j));
-                os << "    <Z" << i << " Z" << j << "> = " << std::fixed << std::setprecision(4) << zz << "\n";
-            }
-        }
+        os << "  " << std::setw(6) << q
+           << " | " << std::fixed << std::setprecision(4) << std::setw(9) << z
+           << " | " << std::setw(9) << x
+           << " | " << std::setw(9) << y
+           << " | " << std::setw(12) << (phi_val / (2.0 * M_PI)) << "\n";
     }
 }
-
-// =============================================================================
-// Factory for QStateRegistry
-// =============================================================================
 
 std::shared_ptr<QState> CreateQStateSpiral(std::size_t grid_size, bool use_phi_direct)
 {

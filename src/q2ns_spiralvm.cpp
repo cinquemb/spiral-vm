@@ -33,59 +33,86 @@ void QStateSpiral::Apply(const QGate& g, const std::vector<Index>& targets)
 {
     if (targets.empty()) return;
 
-    auto apply_builtin = [&](QGateKind kind) {
-        switch (kind) {
-            case QGateKind::I:  break;
-            case QGateKind::H:
-                for (Index q : targets) vm_.logical_hadamard(static_cast<uint32_t>(q), 200, 1.0);
-                break;
-            case QGateKind::X:
-                for (Index q : targets) vm_.logical_x_pulse(static_cast<uint32_t>(q), 1.0);
-                break;
-            case QGateKind::Y:
-                for (Index q : targets) vm_.logical_y_pulse(static_cast<uint32_t>(q), 1.0);
-                break;
-            case QGateKind::Z:
-            case QGateKind::S:
-                for (Index q : targets) vm_.logical_phase_ramp(static_cast<uint32_t>(q), M_PI/2.0, 2);
-                break;
-            case QGateKind::SDG:
-                for (Index q : targets) vm_.logical_phase_ramp(static_cast<uint32_t>(q), -M_PI/2.0, 2);
-                break;
-            case QGateKind::CNOT:
-            case QGateKind::CZ:
-            case QGateKind::SWAP:
-                if (targets.size() >= 2) {
-                    uint32_t ctrl = static_cast<uint32_t>(targets[0]);
-                    uint32_t tgt  = static_cast<uint32_t>(targets[1]);
-                    if (kind == QGateKind::CZ || kind == QGateKind::CNOT) {
-                        vm_.logical_cz(ctrl, tgt);
-                        if (kind == QGateKind::CNOT) {
-                            vm_.logical_hadamard(tgt);
-                            vm_.logical_cz(ctrl, tgt);
-                            vm_.logical_hadamard(tgt);
-                        }
-                    } else if (kind == QGateKind::SWAP) {
-                        vm_.logical_hadamard(tgt); vm_.logical_cz(ctrl, tgt); vm_.logical_hadamard(tgt);
-                        vm_.logical_hadamard(ctrl); vm_.logical_cz(tgt, ctrl); vm_.logical_hadamard(ctrl);
-                        vm_.logical_hadamard(tgt); vm_.logical_cz(ctrl, tgt); vm_.logical_hadamard(tgt);
-                    }
-                }
-                break;
-            case QGateKind::Custom:
-                std::cerr << "[SpiralVM] Custom unitary gates not supported yet\n";
-                break;
-            default:
-                std::cerr << "[SpiralVM] Unknown gate kind\n";
-        }
-    };
+    // Q2NS uses QGateKind, while SpiralVM uses its own Gate struct.
+    // We map Q2NS gates to SpiralVM's logical operations where possible.
 
     if (g.Kind() == QGateKind::Custom) {
-        std::cerr << "[SpiralVM] Custom gates not implemented (waveform backend)\n";
-    } else {
-        apply_builtin(g.Kind());
+        std::cerr << "[SpiralVM] Custom unitary gates not supported (waveform backend)\n";
+        return;
     }
 
+    // Most Q2NS gates are single-qubit or two-qubit with fixed targets
+    if (targets.size() == 1) {
+        uint32_t q = static_cast<uint32_t>(targets[0]);
+
+        switch (g.Kind()) {
+            case QGateKind::I:
+                break;                                      // no-op
+
+            case QGateKind::H:
+                vm_.logical_hadamard(q);                    // uses your tuned Hadamard
+                break;
+
+            case QGateKind::X:
+                vm_.logical_x_pulse(q, 1.0);
+                break;
+
+            case QGateKind::Y:
+                vm_.logical_y_pulse(q, 1.0);
+                break;
+
+            case QGateKind::Z:
+                vm_.logical_z_rotation(q, M_PI);            // full Z
+                break;
+
+            case QGateKind::S:
+                vm_.logical_phase_ramp(q, M_PI/2.0, 2);
+                break;
+
+            case QGateKind::SDG:
+                vm_.logical_phase_ramp(q, -M_PI/2.0, 2);
+                break;
+
+            case QGateKind::T:   // T = Z(π/4)
+                vm_.logical_phase_ramp(q, M_PI/4.0, 2);
+                break;
+
+            default:
+                std::cerr << "[SpiralVM] Unsupported single-qubit gate: " 
+                          << static_cast<int>(g.Kind()) << "\n";
+        }
+    }
+    else if (targets.size() >= 2) {
+        // Two-qubit gates – assume first is control, second is target (common convention)
+        uint32_t ctrl = static_cast<uint32_t>(targets[0]);
+        uint32_t tgt  = static_cast<uint32_t>(targets[1]);
+
+        switch (g.Kind()) {
+            case QGateKind::CZ:
+                vm_.logical_cz(ctrl, tgt);
+                break;
+
+            case QGateKind::CNOT:
+                // Standard decomposition: H(tgt) - CZ - H(tgt)
+                vm_.logical_hadamard(tgt);
+                vm_.logical_cz(ctrl, tgt);
+                vm_.logical_hadamard(tgt);
+                break;
+
+            case QGateKind::SWAP:
+                // Rough 3-CNOT decomposition
+                vm_.logical_hadamard(tgt); vm_.logical_cz(ctrl, tgt); vm_.logical_hadamard(tgt);
+                vm_.logical_hadamard(ctrl); vm_.logical_cz(tgt, ctrl); vm_.logical_hadamard(ctrl);
+                vm_.logical_hadamard(tgt); vm_.logical_cz(ctrl, tgt); vm_.logical_hadamard(tgt);
+                break;
+
+            default:
+                std::cerr << "[SpiralVM] Unsupported two-qubit gate: " 
+                          << static_cast<int>(g.Kind()) << "\n";
+        }
+    }
+
+    // Always run a stabilization period after gate application (as in your apply_gate)
     vm_.run_periods(1);
 }
 

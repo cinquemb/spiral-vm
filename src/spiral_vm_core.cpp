@@ -416,9 +416,10 @@ struct CoilParams {
     double R; // Resistance in Ohms
 };
 
-// Values from Anti-Helmholtz script output (April 2026)
-const CoilParams COIL_X = {0.0021685, 16.9390}; 
-const CoilParams COIL_Y = {0.0015070, 13.0401};
+// Values for the 3-turn DRIVE coils
+const CoilParams COIL_X = {0.0007896, 0.2833}; 
+const CoilParams COIL_Y = {0.0006345, 0.2306};
+
 
 // ------------------------------------
 

@@ -157,6 +157,47 @@ void SpiralVM::apply_local_rotation(uint32_t qid,
     }
 }
 
+// crude low-pass filter: reduce amplitude of high-frequency tones relative to cutoff factor
+void SpiralVM::lowpass_filter_waveform(Waveform &w, double cutoff_factor) {
+    // cutoff_factor in (0,1]: relative attenuation for components beyond cutoff location.
+    // We implement a soft attenuation proportional to freq: high freqs reduced.
+    double maxfreq = 0.0;
+    for (auto &t : w.tones) maxfreq = max(maxfreq, fabs(t.freq));
+    if (maxfreq < 1e-12) return;
+    double cutoff = cutoff_factor * maxfreq;
+    for (auto &t : w.tones) {
+        double f = fabs(t.freq);
+        if (f > cutoff) {
+            double factor = cutoff / f;
+            t.amp *= factor;
+        }
+        // safety clamp
+        t.amp = clamp_tone_amp(t.amp);
+    }
+}
+
+Waveform SpiralVM::make_default_logical_waveform(uint32_t qid) {
+    Waveform w;
+
+    // --- 1. Single dominant tone per qubit ---
+    double carrier = freq_base + qid * freq_spacing;  
+    double amp = clamp_tone_amp(h1);        // main amplitude
+    double phase = (qid % 2 ? M_PI/3 : -M_PI/3); // staggered initial phase per qubit
+    w.tones.push_back(Tone(amp, carrier, phase, 1,1,0.0, 1.0, qid));
+
+    // --- 2. Tiny orthogonal “helper” tone for crosstalk cancellation ---
+    double helper_freq = carrier + 0.1*freq_spacing; 
+    double helper_amp = clamp_tone_amp(0.02 * h1); // tiny amplitude
+    double helper_phase = M_PI/4 + 0.1*qid;        // slight phase shift
+    w.tones.push_back(Tone(helper_amp, helper_freq, helper_phase, 1,1,0.0, 1.0, qid));
+
+    // --- 3. Low-pass / spectral cleanup ---
+    lowpass_filter_waveform(w, lowpass_cutoff);
+
+    return w;
+}
+
+
 // ---------- Add logical qubit + allocate waveform ----------------
 int SpiralVM::allocate_waveform_for_qubit(uint32_t qid) {
     double base = freq_base;
@@ -264,26 +305,6 @@ void SpiralVM::dump_frequency_mapping(const std::string& fname) const {
 }
 
 
-Waveform SpiralVM::make_default_logical_waveform(uint32_t qid) {
-    Waveform w;
-
-    // --- 1. Single dominant tone per qubit ---
-    double carrier = freq_base + qid * freq_spacing;  
-    double amp = clamp_tone_amp(h1);        // main amplitude
-    double phase = (qid % 2 ? M_PI/3 : -M_PI/3); // staggered initial phase per qubit
-    w.tones.push_back(Tone(amp, carrier, phase, 1,1,0.0, 1.0, qid));
-
-    // --- 2. Tiny orthogonal “helper” tone for crosstalk cancellation ---
-    double helper_freq = carrier + 0.1*freq_spacing; 
-    double helper_amp = clamp_tone_amp(0.02 * h1); // tiny amplitude
-    double helper_phase = M_PI/4 + 0.1*qid;        // slight phase shift
-    w.tones.push_back(Tone(helper_amp, helper_freq, helper_phase, 1,1,0.0, 1.0, qid));
-
-    // --- 3. Low-pass / spectral cleanup ---
-    lowpass_filter_waveform(w, lowpass_cutoff);
-
-    return w;
-}
 
 
 // create a CZ-style waveform that briefly introduces correlated phase near both qubits
@@ -316,24 +337,7 @@ Waveform SpiralVM::make_cz_waveform(uint32_t qid1, uint32_t qid2,
     return w;
 }
 
-// crude low-pass filter: reduce amplitude of high-frequency tones relative to cutoff factor
-void SpiralVM::lowpass_filter_waveform(Waveform &w, double cutoff_factor) {
-    // cutoff_factor in (0,1]: relative attenuation for components beyond cutoff location.
-    // We implement a soft attenuation proportional to freq: high freqs reduced.
-    double maxfreq = 0.0;
-    for (auto &t : w.tones) maxfreq = max(maxfreq, fabs(t.freq));
-    if (maxfreq < 1e-12) return;
-    double cutoff = cutoff_factor * maxfreq;
-    for (auto &t : w.tones) {
-        double f = fabs(t.freq);
-        if (f > cutoff) {
-            double factor = cutoff / f;
-            t.amp *= factor;
-        }
-        // safety clamp
-        t.amp = clamp_tone_amp(t.amp);
-    }
-}
+
 
 DriveXY SpiralVM::eval_waveform_xy(const Waveform &w, double t, double local_phase) const {
     DriveXY out{0.0, 0.0};
@@ -406,7 +410,17 @@ uint32_t SpiralVM::add_qubit(uint32_t x, uint32_t y) {
 }
 
 
+// --- COPY SCRIPT OUTPUT HERE ---
+struct CoilParams {
+    double L; // Inductance in Henrys (calculated from turns/geometry)
+    double R; // Resistance in Ohms
+};
 
+// Values from Anti-Helmholtz script output (April 2026)
+const CoilParams COIL_X = {0.0021685, 16.9390}; 
+const CoilParams COIL_Y = {0.0015070, 13.0401};
+
+// ------------------------------------
 
 // ---------- Sample one waveform over one full Floquet period ----------
 // Sample one waveform over one full Floquet period
@@ -423,26 +437,70 @@ void SpiralVM::sample_waveform(const Waveform& w, double t_start, double dt,
 
     for (int k = 0; k < n_samples; ++k) {
         double t = t_start + k * dt;
-        double real_part = 0.0;
-        double imag_part = 0.0;
+        double real_part_i = 0.0; // Target for Coil X
+        double imag_part_q = 0.0; // Target for Coil Y
 
-        // Sum contributions from all tones
         for (const auto& tn : w.tones) {
-            double arg = tn.freq * t + tn.phase;
-            real_part += tn.amp * std::cos(arg);
-            imag_part += tn.amp * std::sin(arg);
+            // Calculate the phase lag each coil will induce at this specific frequency
+            // theta = atan(omega * L / R)
+            double omega = 2.0 * M_PI * tn.freq;
+            double lag_x = std::atan2(omega * COIL_X.L, COIL_X.R);
+            double lag_y = std::atan2(omega * COIL_Y.L, COIL_Y.R);
+
+            // PRE-COMPENSATION:
+            // We advance the phase in code so that after the coil's lag,
+            // the magnetic field is exactly where we want it.
+            real_part_i += tn.amp * std::cos(tn.freq * t + tn.phase + lag_x);
+            imag_part_q += tn.amp * std::sin(tn.freq * t + tn.phase + lag_y);
         }
 
         times(k) = t;
-        iq(k) = cx_double(real_part, imag_part);
+        // iq(k) now represents the compensated [X_drive, Y_drive]
+        iq(k) = arma::cx_double(real_part_i, imag_part_q);
 
-        double amp = std::sqrt(real_part*real_part + imag_part*imag_part);
-        double phase = (amp > 1e-12) ? std::atan2(imag_part, real_part) : 0.0;
-
+        // Standard diagnostic calcs
+        double amp = std::sqrt(real_part_i*real_part_i + imag_part_q*imag_part_q);
+        double phase = (amp > 1e-12) ? std::atan2(imag_part_q, real_part_i) : 0.0;
         amps(k)   = amp;
         phases(k) = phase;
     }
 }
+
+// --- 70 kHz CALIBRATION CONSTANTS -----------------------
+const double L_X = COIL_X.L; // Henrys
+const double R_X = COIL_X.R;   // Ohms
+const double L_Y = COIL_Y.L; // Henrys
+const double R_Y = COIL_X.R;   // Ohms
+const double V_MAX = 100.0;   // DC Supply Limit
+// ---------------------------------------------------------
+
+void SpiralVM::validate_and_sample(const Waveform& w, double t_start, double dt,
+                               arma::vec& times,
+                               arma::cx_vec& iq,
+                               arma::vec& amps,
+                               arma::vec& phases) const {
+    double peak_voltage = 0.0;
+
+    for (const auto& tn : w.tones) {
+        double omega = 2.0 * M_PI * tn.freq;
+        // Impedance Z = sqrt(R^2 + (omega*L)^2)
+        double Z_x = std::sqrt(R_X*R_X + std::pow(omega * L_X, 2));
+        
+        // Check if this tone alone exceeds 100V at 20mA (tn.amp)
+        double tone_v = tn.amp * Z_x;
+        peak_voltage += tone_v; // Conservative sum
+    }
+
+    if (peak_voltage > V_MAX) {
+        std::cerr << "⚠️ WARNING: drive exceeds 100V headroom! (" 
+                  << peak_voltage << "V calculated)\n";
+    }
+
+    // Now call the pre-compensated sample_waveform logic from before...
+    sample_waveform(w, t_start, dt, times, iq, amps, phases);
+}
+
+
 
 // ---------- Main dump function ----------
 void SpiralVM::dump_waveforms(const std::string& format,
@@ -476,7 +534,7 @@ void SpiralVM::dump_waveforms(const std::string& format,
             arma::vec phases;
 
             double dt = T / 1000.0;  // 1000 samples per period — adjust as needed
-            sample_waveform(waveforms[wid], 0.0, dt, times, iq, amps, phases);
+            validate_and_sample(waveforms[wid], 0.0, dt, times, iq, amps, phases);
 
             for (size_t k = 0; k < times.size(); ++k) {
                 fout << times(k) << "," << iq(k).real() << "," << iq(k).imag() << "," << amps(k) << "," << phases(k) << "\n";
@@ -519,7 +577,7 @@ void SpiralVM::dump_waveforms(const std::string& format,
             arma::vec amps;
             arma::vec phases;
             double dt = T / 1000.0;
-            sample_waveform(physical_waveform, 0.0, dt, times, iq, amps, phases);
+            validate_and_sample(physical_waveform, 0.0, dt, times, iq, amps, phases);
             fout << "      \"samples\": [\n";
             for (size_t k = 0; k < times.size(); ++k) {
                 if (k > 0) fout << ",\n";
@@ -1625,13 +1683,22 @@ void SpiralVM::dump_h_eff(const std::string& fname_base, int period) const {
 }
 
 
-// Reconstructs approximate amplitude and phase for a logical qubit from a dumped waveform CSV.
-// Assumes CSV from dump_waveforms("csv", ...) with columns: time_s,I,Q,amp,phase_rad
-// Uses FFT on the complex IQ signal to find the component at the qubit's carrier freq.
-// Returns a pair: <amplitude, phase> at the carrier.
-// For in-memory: overload with bool from_file = true; if false, sample current global waveform in-memory.
-std::pair<double, double> SpiralVM::reconstruct_logical_amp_phase_from_csv(const std::string& fname, uint32_t qid, bool from_file = true) {
-    if (qid >= logical_qubits.size() || qid >= allocated_carriers.size()) {
+// Reconstructs the logical qubit state (amplitude and phase) from a sampled IQ waveform.
+// 
+// Uses Coherent Demodulation (Software Lock-in) to extract the specific carrier 
+// component. Unlike an FFT, this method handles fractional/off-bin frequencies 
+// and suppresses "helper tones" and 5% phase noise by integrating over the 
+// full Floquet period T.
+//
+// If from_file=true: Loads CSV data (time, I, Q) typically dumped from 
+// hardware/SiPM streams.
+// If from_file=false: Samples the internal global waveform using 
+// validate_and_sample() to include L/R coil phase compensation.
+//
+// Returns a std::pair<double, double> representing <amplitude, phase_rad>.
+
+std::pair<double, double> SpiralVM::reconstruct_logical_amp_phase_from_csv(const std::string& fname, uint32_t qid, bool from_file) {
+    if (qid >= allocated_carriers.size()) {
         std::cout << "[SpiralVM] Invalid qid " << qid << " for reconstruction\n";
         return {0.0, 0.0};
     }
@@ -1640,58 +1707,62 @@ std::pair<double, double> SpiralVM::reconstruct_logical_amp_phase_from_csv(const
     arma::vec times;
     arma::cx_vec iq;
 
+    // 1. Data Acquisition (remains similar to your logic)
     if (from_file) {
-        // Load from CSV
         std::ifstream fin(fname);
         if (!fin) {
-            std::cerr << "[SpiralVM] Failed to open " << fname << " for reconstruction\n";
+            std::cerr << "[SpiralVM] Failed to open " << fname << "\n";
             return {0.0, 0.0};
         }
-
         std::string line;
         std::vector<double> t_vec, i_vec, q_vec;
         while (std::getline(fin, line)) {
-            if (line.empty() || line[0] == '#') continue;  // Skip headers/comments
+            if (line.empty() || line[0] == '#') continue;
             std::stringstream ss(line);
             std::string token;
             std::vector<std::string> cols;
             while (std::getline(ss, token, ',')) cols.push_back(token);
-            if (cols.size() < 5) continue;  // time,I,Q,amp,phase
+            if (cols.size() < 3) continue; 
             t_vec.push_back(std::stod(cols[0]));
             i_vec.push_back(std::stod(cols[1]));
             q_vec.push_back(std::stod(cols[2]));
         }
-        fin.close();
-
         times = arma::vec(t_vec);
         iq = arma::cx_vec(arma::vec(i_vec), arma::vec(q_vec));
     } else {
-        // In-memory: sample current global waveform (id 0)
-        double dt = T / 1000.0;  // Match dump resolution
-        arma::vec amps, phases;  // Unused
-        sample_waveform(waveforms[0], 0.0, dt, times, iq, amps, phases);
+        double dt = T / 1000.0;
+        arma::vec amps, phases;
+        // Use the validated sampler to ensure L/R compensation is included
+        validate_and_sample(waveforms[0], 0.0, dt, times, iq, amps, phases);
     }
 
-    if (times.empty() || iq.empty()) {
-        std::cout << "[SpiralVM] No data for reconstruction of q" << qid << "\n";
-        return {0.0, 0.0};
+    if (times.empty() || iq.empty()) return {0.0, 0.0};
+
+    // 2. Coherent Demodulation (Software Lock-in)
+    // This handles fractional frequencies and suppresses off-bin noise/helper tones.
+    std::complex<double> accumulator(0, 0);
+    size_t n = times.n_elem;
+
+    for (size_t k = 0; k < n; ++k) {
+        double angle = 2.0 * M_PI * carrier_freq * times(k);
+        // Create a local oscillator (LO) reference at the target carrier
+        std::complex<double> reference(std::cos(angle), -std::sin(angle));
+        
+        // Multiply signal by LO and accumulate
+        // (I + jQ) * (cos - jsin) shifts the target carrier to DC (0 Hz)
+        accumulator += iq(k) * reference;
     }
 
-    // FFT of IQ signal
-    arma::cx_vec fft_iq = arma::fft(iq);
-    arma::vec freqs(iq.n_elem);
-    double dt = times(1) - times(0);
-    double fs = 1.0 / dt;
-    for (size_t k = 0; k < iq.n_elem; ++k)
-        freqs(k) = k * fs / iq.n_elem;
+    // 3. Normalize and extract Magnitude/Phase
+    // Factor of 2.0/n because the FFT/Demod splits energy into +/- frequencies
+    std::complex<double> result = (accumulator / static_cast<double>(n)) * 2.0;
 
-    // Find index closest to carrier_freq
-    arma::uword idx = arma::index_min(arma::abs(freqs - carrier_freq));
-    std::complex<double> component = fft_iq(idx) / static_cast<double>(iq.n_elem);  // Normalize
+    double amp = std::abs(result);
+    double phase = std::arg(result);
 
-    double amp = std::abs(component);
-    double phase = std::arg(component);
+    std::cout << "[SpiralVM] Reconstructed q" << qid 
+              << " at " << carrier_freq << " Hz: "
+              << "amp=" << amp << ", phase=" << phase << " rad\n";
 
-    std::cout << "[SpiralVM] Reconstructed for q" << qid << ": amp=" << amp << ", phase=" << phase << "\n";
     return {amp, phase};
 }

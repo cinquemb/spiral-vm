@@ -174,6 +174,8 @@ public:
 
     // Helper to sample a waveform over one period
     void sample_waveform(const Waveform& w, double t_start, double dt, arma::vec& times, arma::cx_vec& iq, arma::vec& amps, arma::vec& phases) const;
+    // Helper to sample a waveform over one period with validation
+    void validate_and_sample(const Waveform& w, double t_start, double dt, arma::vec& times, arma::cx_vec& iq, arma::vec& amps, arma::vec& phases) const;
     void compile_to_physical_waveform();  // Compiles all logical waveforms into a single global physical waveform (multi-tone broadcast)
     void dump_frequency_mapping(const std::string& fname = "frequency_to_logical.json") const;
 

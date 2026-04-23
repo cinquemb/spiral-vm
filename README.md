@@ -3,6 +3,7 @@
 ![C++17](https://img.shields.io/badge/C++-17-blue)
 ![Armadillo](https://img.shields.io/badge/Armadillo-12.8+-orange)
 [![Zenodo](https://zenodo.org/badge/DOI/10.5281/zenodo.15108309.svg)](https://doi.org/10.5281/zenodo.15108309)
+[![QCNC2026](https://img.shields.io/badge/QCNC2026-Kobe-red)](https://www.youtube.com/watch?v=da7NVwOvy6Y)
 [![ORCID](https://img.shields.io/badge/ORCID-0009--0005--5585--0584-brightgreen)](https://orcid.org/0009-0005-5585-0584)
 
 
@@ -80,7 +81,7 @@ sys 0m0.020s
 
 The "31-Bit" Milestone (INT_MAX) Universal, fault-tolerant factorization of a 31-bit integer (\(N=2,147,483,641\)) in 3m 18s. This demo verifies the SpiralVM architecture at the absolute limit of 32-bit signed computing. By utilizing a 20x20 physical block (400 spins), the engine maintained topological stability through a 62-period modular exponentiation depth using a single 7-tone global waveform. Key Achievement: Proven 1:1 physical-to-logical overhead for cryptographically relevant register depths. Total memory footprint remained under 1MB, effectively bypassing the 'memory wall' that restricts standard Hilbert-space simulators. The system is now officially hardware-starved; Phase 1 (Universal VM) is complete.:
 ```bash
-$ g++ -O2 ../src/spiral_vm_core.cpp shors_demo.cpp -o shors_demo -larmadillo -llapack -lblas
+$ g++ -O2 ../src/spiral_vm_core.cpp shors_demo_quantum.cpp -o shors_demo_q -larmadillo -llapack -lblas
 $ time ./shors_demo 2147483641 20 > shors_demo.txt; cat shors_demo.txt
 
 real  3m18.396s

@@ -3,7 +3,9 @@
 ![C++17](https://img.shields.io/badge/C++-17-blue)
 ![Armadillo](https://img.shields.io/badge/Armadillo-12.8+-orange)
 [![Zenodo](https://zenodo.org/badge/DOI/10.5281/zenodo.15108309.svg)](https://doi.org/10.5281/zenodo.15108309)
+[![QCNC2026](https://img.shields.io/badge/QCNC2026-Kobe-red)](https://www.youtube.com/watch?v=da7NVwOvy6Y)
 [![ORCID](https://img.shields.io/badge/ORCID-0009--0005--5585--0584-brightgreen)](https://orcid.org/0009-0005-5585-0584)
+[![IEEE Xplore](https://img.shields.io/badge/IEEE-XPLORE-blue)](https://doi.org/10.1109/QCNC69040.2026.00181)
 
 
 **The world's first 1:1 overhead, topologically protected, universal quantum virtual machine. A fully functional proof-of-principle FTQC virtual machine for 900 spins. Scales as a playground for global-drive logical qubits. The high-performance engine handles the heavy lifting.**
